@@ -3,12 +3,9 @@
 :root {
   --background: #020817;
   --foreground: #f8fafc;
-<<<<<<< HEAD
   --panel: #0f172a;
   --panel-muted: #111827;
   --border: #1e293b;
-=======
->>>>>>> 245b88883321cf868d8a614a8e8733d1fb09da00
 }
 
 html {
@@ -19,21 +16,13 @@ html {
 
 body {
   margin: 0;
-<<<<<<< HEAD
   min-height: 100dvh;
   overflow: hidden;
   background: var(--background);
-=======
-  min-height: 100vh;
-  background:
-    radial-gradient(circle at top, rgba(34, 211, 238, 0.14), transparent 35%),
-    var(--background);
->>>>>>> 245b88883321cf868d8a614a8e8733d1fb09da00
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
 
-<<<<<<< HEAD
 [data-theme="light"] {
   --background: #f4f7f8;
   --foreground: #12212b;
@@ -82,8 +71,6 @@ body {
   background: #ffffff;
 }
 
-=======
->>>>>>> 245b88883321cf868d8a614a8e8733d1fb09da00
 * {
   box-sizing: border-box;
 }
@@ -108,7 +95,6 @@ input:focus-visible {
 .mapboxgl-ctrl-attrib {
   display: none !important;
 }
-<<<<<<< HEAD
 
 .map-shell,
 .map-stage,
@@ -213,5 +199,3 @@ input:focus-visible {
     flex: 1;
   }
 }
-=======
->>>>>>> 245b88883321cf868d8a614a8e8733d1fb09da00

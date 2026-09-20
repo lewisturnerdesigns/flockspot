@@ -21,10 +21,7 @@ const STORAGE_KEYS = {
   settings: "flockspot-settings",
   alertState: "flockspot-alert-state",
   manualLocation: "flockspot-manual-location",
-<<<<<<< HEAD
   theme: "flockspot-theme",
-=======
->>>>>>> 245b88883321cf868d8a614a8e8733d1fb09da00
 };
 
 const defaultSpots: Spot[] = [
@@ -108,16 +105,12 @@ export default function Home() {
     readLocalStorage(STORAGE_KEYS.alertState, {}),
   );
   const [location, setLocation] = useState<UserLocation | null>(null);
-<<<<<<< HEAD
   const [theme, setTheme] = useState<"light" | "dark">(() => readLocalStorage(STORAGE_KEYS.theme, "dark"));
-=======
->>>>>>> 245b88883321cf868d8a614a8e8733d1fb09da00
   const [spots, setSpots] = useState<Spot[]>(defaultSpots);
   const [cameraStatus, setCameraStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [cameraError, setCameraError] = useState<string | null>(null);
   const lastCameraQueryLocation = useRef<UserLocation | null>(null);
   const hasAutoZoomedToLocation = useRef(false);
-<<<<<<< HEAD
   const [followLocation, setFollowLocation] = useState(true);
   const [menuOpen, setMenuOpen] = useState(false);
   const spotsRef = useRef(spots);
@@ -126,10 +119,6 @@ export default function Home() {
     spotsRef.current = spots;
   }, [spots]);
 
-=======
-  const spotsRef = useRef(spots);
-  spotsRef.current = spots;
->>>>>>> 245b88883321cf868d8a614a8e8733d1fb09da00
   const [manualLocation, setManualLocation] = useState<UserLocation | null>(() =>
     readLocalStorage<UserLocation | null>(STORAGE_KEYS.manualLocation, null),
   );
@@ -160,13 +149,10 @@ export default function Home() {
   }, [manualLocation]);
 
   useEffect(() => {
-<<<<<<< HEAD
     writeLocalStorage(STORAGE_KEYS.theme, theme);
   }, [theme]);
 
   useEffect(() => {
-=======
->>>>>>> 245b88883321cf868d8a614a8e8733d1fb09da00
     if (typeof navigator === "undefined") {
       return;
     }
@@ -186,11 +172,7 @@ export default function Home() {
     };
 
     if (!navigator.geolocation) {
-<<<<<<< HEAD
       queueMicrotask(() => setLocationPermission("denied"));
-=======
-      setLocationPermission("denied");
->>>>>>> 245b88883321cf868d8a614a8e8733d1fb09da00
       return;
     }
 
@@ -276,7 +258,6 @@ export default function Home() {
       return;
     }
 
-<<<<<<< HEAD
     const distance = formatDistance(
       distanceBetweenMeters(effectiveLocation, { latitude: toAlert.latitude, longitude: toAlert.longitude }),
       settings.units,
@@ -288,11 +269,6 @@ export default function Home() {
     }, 0);
 
     return () => window.clearTimeout(timeoutId);
-=======
-    setAlertMessage(`You are approximately ${formatDistance(distanceBetweenMeters(effectiveLocation, { latitude: toAlert.latitude, longitude: toAlert.longitude }), settings.units)} from a mapped Spot.`);
-    setAlertState((current) => ({ ...current, [toAlert.id]: Date.now() }));
-    showLocalNotification("FlockSpot Alert", `You're approximately ${formatDistance(distanceBetweenMeters(effectiveLocation, { latitude: toAlert.latitude, longitude: toAlert.longitude }), settings.units)} from a mapped Spot.`);
->>>>>>> 245b88883321cf868d8a614a8e8733d1fb09da00
   }, [alertState, effectiveLocation, settings, spots]);
 
   useEffect(() => {
@@ -318,109 +294,19 @@ export default function Home() {
       map.addSource("spots-source", {
         type: "geojson",
         data: geoJson,
-<<<<<<< HEAD
-=======
-        cluster: true,
-        clusterMaxZoom: 10,
-        clusterRadius: 40,
-      });
-
-      map.addLayer({
-        id: "cluster-glow",
-        type: "circle",
-        source: "spots-source",
-        filter: ["has", "point_count"],
-        paint: {
-          "circle-color": "#22d3ee",
-          "circle-radius": [
-            "step",
-            ["get", "point_count"],
-            27,
-            3,
-            34,
-            7,
-            42,
-          ],
-          "circle-opacity": 0.2,
-          "circle-blur": 1,
-        },
-      });
-
-      map.addLayer({
-        id: "cluster-circles",
-        type: "circle",
-        source: "spots-source",
-        filter: ["has", "point_count"],
-        paint: {
-          "circle-color": [
-            "step",
-            ["get", "point_count"],
-            "#60a5fa",
-            3,
-            "#38bdf8",
-            7,
-            "#22d3ee",
-          ],
-          "circle-radius": [
-            "step",
-            ["get", "point_count"],
-            18,
-            3,
-            24,
-            7,
-            30,
-          ],
-          "circle-stroke-width": 2,
-          "circle-stroke-color": "#cffafe",
-        },
-      });
-
-      map.addLayer({
-        id: "cluster-count",
-        type: "symbol",
-        source: "spots-source",
-        filter: ["has", "point_count"],
-        layout: {
-          "text-field": ["get", "point_count_abbreviated"],
-          "text-font": ["Open Sans Bold", "Arial Unicode MS Bold"],
-          "text-size": 12,
-        },
-        paint: {
-          "text-color": "#f8fafc",
-        },
-      });
-
-      map.addLayer({
-        id: "spot-glow",
-        type: "circle",
-        source: "spots-source",
-        filter: ["!", ["has", "point_count"]],
-        paint: {
-          "circle-radius": 11,
-          "circle-color": "#38bdf8",
-          "circle-opacity": 0.42,
-          "circle-blur": 1,
-        },
->>>>>>> 245b88883321cf868d8a614a8e8733d1fb09da00
       });
 
       map.addLayer({
         id: "spot-points",
         type: "circle",
         source: "spots-source",
-<<<<<<< HEAD
         paint: {
           "circle-color": "#0ea5e9",
-=======
-        filter: ["!", ["has", "point_count"]],
-        paint: {
->>>>>>> 245b88883321cf868d8a614a8e8733d1fb09da00
           "circle-radius": [
             "interpolate",
             ["linear"],
             ["zoom"],
             10,
-<<<<<<< HEAD
             3,
             14,
             5,
@@ -429,18 +315,6 @@ export default function Home() {
           ],
           "circle-stroke-width": 2,
           "circle-stroke-color": "#e0f2fe",
-=======
-            4,
-            14,
-            6,
-            18,
-            8,
-          ],
-          "circle-color": "#06b6d4",
-          "circle-opacity": 1,
-          "circle-stroke-width": 2,
-          "circle-stroke-color": "#ecfeff",
->>>>>>> 245b88883321cf868d8a614a8e8733d1fb09da00
         },
       });
 
@@ -448,25 +322,14 @@ export default function Home() {
         id: "spot-directions",
         type: "symbol",
         source: "spots-source",
-<<<<<<< HEAD
         layout: {
           "text-field": "▲",
           "text-font": ["Open Sans Bold", "Arial Unicode MS Bold"],
-=======
-        filter: [
-          "all",
-          ["!", ["has", "point_count"]],
-          [">=", ["get", "direction"], 0],
-        ],
-        layout: {
-          "text-field": "▲",
->>>>>>> 245b88883321cf868d8a614a8e8733d1fb09da00
           "text-size": [
             "interpolate",
             ["linear"],
             ["zoom"],
             10,
-<<<<<<< HEAD
             12,
             18,
             20,
@@ -478,21 +341,6 @@ export default function Home() {
         paint: {
           "text-color": "#38bdf8",
           "text-halo-color": "#082f49",
-=======
-            10,
-            16,
-            15,
-          ],
-          "text-allow-overlap": true,
-          "text-ignore-placement": true,
-          "text-rotate": ["get", "direction"],
-          "text-rotation-alignment": "map",
-          "text-offset": [0, -1.1],
-        },
-        paint: {
-          "text-color": "#e0f2fe",
-          "text-halo-color": "#0369a1",
->>>>>>> 245b88883321cf868d8a614a8e8733d1fb09da00
           "text-halo-width": 1,
         },
       });
@@ -506,7 +354,6 @@ export default function Home() {
       });
 
       map.addLayer({
-<<<<<<< HEAD
         id: "user-location-accuracy",
         type: "circle",
         source: "user-location-source",
@@ -521,8 +368,6 @@ export default function Home() {
       });
 
       map.addLayer({
-=======
->>>>>>> 245b88883321cf868d8a614a8e8733d1fb09da00
         id: "user-location-layer",
         type: "circle",
         source: "user-location-source",
@@ -542,11 +387,8 @@ export default function Home() {
           setActiveTab("map");
         }
       });
-<<<<<<< HEAD
 
       map.on("dragstart", () => setFollowLocation(false));
-=======
->>>>>>> 245b88883321cf868d8a614a8e8733d1fb09da00
     });
 
     return () => {
@@ -580,11 +422,7 @@ export default function Home() {
             type: "Point" as const,
             coordinates: [effectiveLocation.longitude, effectiveLocation.latitude],
           },
-<<<<<<< HEAD
           properties: { accuracy: effectiveLocation.accuracy ?? 0 },
-=======
-          properties: {},
->>>>>>> 245b88883321cf868d8a614a8e8733d1fb09da00
         },
       ],
     };
@@ -596,20 +434,16 @@ export default function Home() {
       userSource.setData(userLocation);
     }
 
-<<<<<<< HEAD
     if (!followLocation) {
       return;
     }
 
-=======
->>>>>>> 245b88883321cf868d8a614a8e8733d1fb09da00
     const shouldAutoZoom = !hasAutoZoomedToLocation.current;
     hasAutoZoomedToLocation.current = true;
 
     mapRef.current.easeTo({
       center: [effectiveLocation.longitude, effectiveLocation.latitude],
       ...(shouldAutoZoom ? { zoom: config.initialLocationZoom } : {}),
-<<<<<<< HEAD
       duration: shouldAutoZoom ? 500 : 250,
       essential: true,
     });
@@ -628,12 +462,6 @@ export default function Home() {
       essential: true,
     });
   };
-=======
-      duration: 500,
-      essential: true,
-    });
-  }, [effectiveLocation]);
->>>>>>> 245b88883321cf868d8a614a8e8733d1fb09da00
 
   const nearbySpots = useMemo(() => {
     if (!effectiveLocation) {
@@ -734,7 +562,6 @@ export default function Home() {
   };
 
   return (
-<<<<<<< HEAD
     <main data-theme={theme} className="map-shell text-slate-100">
       <section className="map-stage">
         <div ref={mapContainerRef} className="map-canvas" />
@@ -754,28 +581,6 @@ export default function Home() {
           <aside id="map-menu" className="map-menu" aria-label="FlockSpot menu">
             <div className="border-b border-slate-800 p-3">
               <nav className="grid grid-cols-2 gap-2 text-xs font-medium sm:grid-cols-4">
-=======
-    <main className="min-h-screen bg-slate-950 text-slate-100">
-      <div className="mx-auto flex min-h-screen max-w-7xl flex-col">
-        <header className="border-b border-slate-800 bg-slate-950/90 px-4 py-3 backdrop-blur-sm">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <p className="text-xs uppercase tracking-[0.25em] text-cyan-300">privacy-first</p>
-              <h1 className="text-2xl font-bold text-white">FlockSpot</h1>
-            </div>
-            <div className="flex items-center gap-2 text-xs text-slate-300">
-              <span className="rounded-full border border-cyan-500/40 bg-cyan-500/10 px-2 py-1">
-                {locationPermission === "granted" ? "Location ready" : "Location limited"}
-              </span>
-            </div>
-          </div>
-        </header>
-
-        <div className="flex-1 md:grid md:grid-cols-[360px_minmax(0,1fr)]">
-          <aside className="border-b border-slate-800 bg-slate-950 md:border-b-0 md:border-r">
-            <div className="border-b border-slate-800 p-3">
-              <nav className="grid grid-cols-4 gap-2 text-xs font-medium">
->>>>>>> 245b88883321cf868d8a614a8e8733d1fb09da00
                 {[
                   { key: "map", label: "Map" },
                   { key: "nearby", label: "Nearby" },
@@ -1016,7 +821,6 @@ export default function Home() {
                   </div>
 
                   <div className="rounded-xl border border-slate-800 bg-slate-900 p-3 text-sm text-slate-200">
-<<<<<<< HEAD
                     <p className="text-slate-300">Appearance</p>
                     <div className="mt-2 grid grid-cols-2 gap-2">
                       {["light", "dark"].map((mode) => (
@@ -1033,8 +837,6 @@ export default function Home() {
                   </div>
 
                   <div className="rounded-xl border border-slate-800 bg-slate-900 p-3 text-sm text-slate-200">
-=======
->>>>>>> 245b88883321cf868d8a614a8e8733d1fb09da00
                     <p className="text-slate-300">Notifications</p>
                     {notificationStatus === "unsupported" ? (
                       <p className="mt-2 text-amber-200">Notifications unavailable in this browser.</p>
@@ -1117,7 +919,6 @@ export default function Home() {
               )}
             </div>
           </aside>
-<<<<<<< HEAD
         )}
 
         {alertMessage && (
@@ -1157,41 +958,6 @@ export default function Home() {
           </div>
         </div>
       </section>
-=======
-
-          <section className="relative min-h-[52vh] flex-1 bg-slate-900">
-            <div ref={mapContainerRef} className="h-[55vh] w-full md:h-full" />
-
-            {alertMessage && (
-              <div className="absolute left-4 top-4 max-w-md rounded-2xl border border-cyan-500/50 bg-slate-950/85 p-3 text-sm text-cyan-100 shadow-lg backdrop-blur-sm">
-                <p className="font-semibold">FlockSpot Alert</p>
-                <p className="mt-1">{alertMessage}</p>
-              </div>
-            )}
-
-            <div className="absolute bottom-4 left-4 right-4 md:bottom-6 md:left-6 md:right-6">
-              <div className="rounded-2xl border border-slate-700 bg-slate-950/80 p-3 shadow-xl backdrop-blur-sm">
-                <div className="flex items-center justify-between gap-4">
-                  <div>
-                    <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Status</p>
-                    <p className="text-sm text-slate-200">
-                      {effectiveLocation ? `Updated ${effectiveLocation.latitude.toFixed(4)}, ${effectiveLocation.longitude.toFixed(4)}` : "Waiting for location"}
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setActiveTab("add")}
-                    className="rounded-xl bg-cyan-500 px-4 py-2 text-sm font-semibold text-slate-950"
-                  >
-                    Add Spot
-                  </button>
-                </div>
-              </div>
-            </div>
-          </section>
-        </div>
-      </div>
->>>>>>> 245b88883321cf868d8a614a8e8733d1fb09da00
     </main>
   );
 }

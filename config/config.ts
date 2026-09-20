@@ -8,11 +8,7 @@ export const config = {
   defaultAlertDistanceFeet: 500,
   duplicateRadiusFeet: 50,
   cameraSearchRadiusMeters: 10000,
-<<<<<<< HEAD
   initialLocationZoom: 14.5,
-=======
-  initialLocationZoom: 13.5,
->>>>>>> 245b88883321cf868d8a614a8e8733d1fb09da00
   locationUpdateDistanceMeters: 25,
   mapStyle: {
     version: 8,
