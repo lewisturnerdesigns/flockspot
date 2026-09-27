@@ -2,7 +2,8 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as maplibregl from "maplibre-gl";
-import "maplibre-gl/dist/maplibre-gl.css";
+import "maplibre-theme/icons.default.css";
+import "maplibre-theme/modern.css";
 import { config } from "@/config/config";
 import {
   buildGeoJson,
@@ -95,9 +96,36 @@ function getLocationPermissionState(): "granted" | "denied" | "prompt" | "unknow
   return "prompt";
 }
 
+function createLocationMarkerElement() {
+  const element = document.createElement("div");
+  element.className = "user-location-marker";
+  element.setAttribute("aria-hidden", "true");
+  return element;
+}
+
+function getViewportSearchRadius(map: maplibregl.Map): number {
+  const center = map.getCenter();
+  const bounds = map.getBounds();
+  const centerLocation = { latitude: center.lat, longitude: center.lng };
+  const northDistance = distanceBetweenMeters(centerLocation, {
+    latitude: bounds.getNorth(),
+    longitude: center.lng,
+  });
+  const eastDistance = distanceBetweenMeters(centerLocation, {
+    latitude: center.lat,
+    longitude: bounds.getEast(),
+  });
+
+  return Math.min(
+    config.cameraSearchRadiusMeters,
+    Math.max(1000, Math.max(northDistance, eastDistance) * 1.25),
+  );
+}
+
 export default function Home() {
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
+  const userMarkerRef = useRef<maplibregl.Marker | null>(null);
   const [settings, setSettings] = useState<AlertPreferences>(() =>
     readLocalStorage(STORAGE_KEYS.settings, getDefaultSettings()),
   );
@@ -109,7 +137,9 @@ export default function Home() {
   const [spots, setSpots] = useState<Spot[]>(defaultSpots);
   const [cameraStatus, setCameraStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [cameraError, setCameraError] = useState<string | null>(null);
-  const lastCameraQueryLocation = useRef<UserLocation | null>(null);
+  const [mapLoaded, setMapLoaded] = useState(false);
+  const [mapQuery, setMapQuery] = useState<{ location: UserLocation; radiusMeters: number } | null>(null);
+  const lastCameraQuery = useRef<{ location: UserLocation; radiusMeters: number } | null>(null);
   const hasAutoZoomedToLocation = useRef(false);
   const [followLocation, setFollowLocation] = useState(true);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -206,25 +236,44 @@ export default function Home() {
   }, []);
 
   const effectiveLocation = manualLocation ?? location;
+  const effectiveLocationRef = useRef(effectiveLocation);
 
   useEffect(() => {
-    if (!effectiveLocation) {
+    effectiveLocationRef.current = effectiveLocation;
+  }, [effectiveLocation]);
+
+  useEffect(() => {
+    const query = mapQuery ??
+      (effectiveLocation
+        ? { location: effectiveLocation, radiusMeters: config.cameraSearchRadiusMeters }
+        : null);
+    if (!query) {
       return;
     }
 
-    const previousLocation = lastCameraQueryLocation.current;
-    if (previousLocation && distanceBetweenMeters(previousLocation, effectiveLocation) < 1000) {
+    const previousQuery = lastCameraQuery.current;
+    if (
+      previousQuery &&
+      distanceBetweenMeters(previousQuery.location, query.location) < config.locationUpdateDistanceMeters &&
+      Math.abs(previousQuery.radiusMeters - query.radiusMeters) < Math.max(5000, previousQuery.radiusMeters * 0.25)
+    ) {
       return;
     }
 
     const controller = new AbortController();
-    lastCameraQueryLocation.current = effectiveLocation;
+    lastCameraQuery.current = query;
     setCameraStatus("loading");
     setCameraError(null);
 
-    void fetchNearbySpots(effectiveLocation, config.cameraSearchRadiusMeters, controller.signal)
+    void fetchNearbySpots(query.location, query.radiusMeters, controller.signal)
       .then((nextSpots) => {
-        setSpots(nextSpots);
+        console.info(
+          `[FlockSpot] Map received ${nextSpots.length} live camera spot(s) near ${query.location.latitude.toFixed(5)}, ${query.location.longitude.toFixed(5)}.`,
+        );
+        if (nextSpots.length === 0) {
+          console.info("[FlockSpot] No live spots were found; displaying the built-in sample locations.");
+        }
+        setSpots(nextSpots.length > 0 ? nextSpots : defaultSpots);
         setCameraStatus("ready");
       })
       .catch((error: unknown) => {
@@ -236,7 +285,7 @@ export default function Home() {
       });
 
     return () => controller.abort();
-  }, [effectiveLocation]);
+  }, [effectiveLocation, mapQuery]);
 
   useEffect(() => {
     if (!effectiveLocation || !settings.enabled) {
@@ -279,8 +328,11 @@ export default function Home() {
     const map = new maplibregl.Map({
       container: mapContainerRef.current,
       style: config.mapStyle,
-      center: effectiveLocation ? [effectiveLocation.longitude, effectiveLocation.latitude] : config.defaultCenter,
-      zoom: effectiveLocation ? config.initialLocationZoom : config.defaultZoom,
+      center: effectiveLocationRef.current
+        ? [effectiveLocationRef.current.longitude, effectiveLocationRef.current.latitude]
+        : config.defaultCenter,
+      zoom: effectiveLocationRef.current ? config.initialLocationZoom : config.defaultZoom,
+      maxZoom: 19,
       attributionControl: false,
     });
 
@@ -290,10 +342,44 @@ export default function Home() {
     map.addControl(new maplibregl.AttributionControl({ compact: true }), "bottom-right");
 
     map.on("load", () => {
+      setMapLoaded(true);
       const geoJson = buildGeoJson(spotsRef.current);
+      console.info(`[FlockSpot] Map rendering ${spotsRef.current.length} camera spot(s).`);
+      console.table(
+        spotsRef.current.map((spot) => ({
+          id: spot.id,
+          latitude: spot.latitude,
+          longitude: spot.longitude,
+          direction: spot.direction ?? "unknown",
+          name: spot.name ?? "Unnamed",
+        })),
+      );
       map.addSource("spots-source", {
         type: "geojson",
         data: geoJson,
+      });
+
+      map.addLayer({
+        id: "spot-point-halo",
+        type: "circle",
+        source: "spots-source",
+        paint: {
+          "circle-color": "#f97316",
+          "circle-radius": [
+            "interpolate",
+            ["linear"],
+            ["zoom"],
+            3,
+            10,
+            10,
+            15,
+            14,
+            19,
+            18,
+            24,
+          ],
+          "circle-opacity": 0.3,
+        },
       });
 
       map.addLayer({
@@ -301,20 +387,23 @@ export default function Home() {
         type: "circle",
         source: "spots-source",
         paint: {
-          "circle-color": "#0ea5e9",
+          "circle-color": "#ef4444",
           "circle-radius": [
             "interpolate",
             ["linear"],
             ["zoom"],
-            10,
             3,
+            6,
+            10,
+            8,
             14,
-            5,
-            18,
-            7,
+            10,
+            19,
+            13,
           ],
-          "circle-stroke-width": 2,
-          "circle-stroke-color": "#e0f2fe",
+          "circle-opacity": 0.98,
+          "circle-stroke-width": 3,
+          "circle-stroke-color": "#ffffff",
         },
       });
 
@@ -329,8 +418,10 @@ export default function Home() {
             "interpolate",
             ["linear"],
             ["zoom"],
+            3,
+            14,
             10,
-            12,
+            16,
             18,
             20,
           ],
@@ -352,6 +443,26 @@ export default function Home() {
           features: [],
         },
       });
+
+      if (effectiveLocationRef.current) {
+        const initialLocation = effectiveLocationRef.current;
+        const userSource = map.getSource("user-location-source") as unknown as
+          | { setData: (data: unknown) => void }
+          | undefined;
+        userSource?.setData({
+          type: "FeatureCollection",
+          features: [
+            {
+              type: "Feature",
+              geometry: {
+                type: "Point",
+                coordinates: [initialLocation.longitude, initialLocation.latitude],
+              },
+              properties: { accuracy: initialLocation.accuracy ?? 0 },
+            },
+          ],
+        });
+      }
 
       map.addLayer({
         id: "user-location-accuracy",
@@ -389,11 +500,21 @@ export default function Home() {
       });
 
       map.on("dragstart", () => setFollowLocation(false));
+      map.on("moveend", () => {
+        const center = map.getCenter();
+        setMapQuery({
+          location: { latitude: center.lat, longitude: center.lng },
+          radiusMeters: getViewportSearchRadius(map),
+        });
+      });
     });
 
     return () => {
+      userMarkerRef.current?.remove();
+      userMarkerRef.current = null;
       map.remove();
       mapRef.current = null;
+      setMapLoaded(false);
     };
   }, []);
 
@@ -404,12 +525,14 @@ export default function Home() {
 
     const source = mapRef.current.getSource("spots-source") as { setData: (data: unknown) => void } | undefined;
     if (source) {
+      console.info(`[FlockSpot] Updating map source with ${spots.length} camera spot(s).`);
       source.setData(buildGeoJson(spots));
     }
   }, [spots]);
 
   useEffect(() => {
-    if (!mapRef.current || !effectiveLocation) {
+    const map = mapRef.current;
+    if (!map || !effectiveLocation) {
       return;
     }
 
@@ -427,7 +550,7 @@ export default function Home() {
       ],
     };
 
-    const userSource = mapRef.current.getSource("user-location-source") as
+    const userSource = map.getSource("user-location-source") as
       | { setData: (data: unknown) => void }
       | undefined;
     if (userSource) {
@@ -441,13 +564,49 @@ export default function Home() {
     const shouldAutoZoom = !hasAutoZoomedToLocation.current;
     hasAutoZoomedToLocation.current = true;
 
-    mapRef.current.easeTo({
+    map.easeTo({
       center: [effectiveLocation.longitude, effectiveLocation.latitude],
       ...(shouldAutoZoom ? { zoom: config.initialLocationZoom } : {}),
       duration: shouldAutoZoom ? 500 : 250,
       essential: true,
     });
   }, [effectiveLocation, followLocation]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapLoaded || !effectiveLocation || !map.getSource("user-location-source")) {
+      return;
+    }
+
+    if (!userMarkerRef.current) {
+      userMarkerRef.current = new maplibregl.Marker({
+        anchor: "center",
+        element: createLocationMarkerElement(),
+      });
+      userMarkerRef.current.setLngLat([effectiveLocation.longitude, effectiveLocation.latitude]);
+      userMarkerRef.current.addTo(map);
+      return;
+    }
+
+    userMarkerRef.current.setLngLat([effectiveLocation.longitude, effectiveLocation.latitude]);
+  }, [effectiveLocation, mapLoaded]);
+
+  const plotDataReady = cameraStatus === "ready" || cameraStatus === "error";
+  const isMapLoading =
+    !mapLoaded ||
+    (!effectiveLocation && locationPermission === "prompt") ||
+    (Boolean(effectiveLocation) && !plotDataReady);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !map.getLayer("openstreetmap")) {
+      return;
+    }
+
+    map.setPaintProperty("openstreetmap", "raster-saturation", theme === "dark" ? -0.25 : -0.05);
+    map.setPaintProperty("openstreetmap", "raster-contrast", theme === "dark" ? 0.05 : -0.05);
+    map.setPaintProperty("openstreetmap", "raster-brightness-max", theme === "dark" ? 0.38 : 1);
+  }, [theme]);
 
   const recenterOnLocation = () => {
     if (!effectiveLocation || !mapRef.current) {
@@ -562,9 +721,24 @@ export default function Home() {
   };
 
   return (
-    <main data-theme={theme} className="map-shell text-slate-100">
+    <main data-theme={theme} className="dark map-shell text-slate-100">
       <section className="map-stage">
         <div ref={mapContainerRef} className="map-canvas" />
+
+        {isMapLoading && (
+          <div className="map-loading" role="status" aria-live="polite">
+            <div className="map-loading-card">
+              <span className="map-loading-spinner" aria-hidden="true" />
+              <span>
+                {!mapLoaded
+                  ? "Loading map..."
+                  : !effectiveLocation
+                    ? "Finding your location..."
+                    : "Loading camera spots..."}
+              </span>
+            </div>
+          </div>
+        )}
 
         <button
           type="button"
@@ -614,7 +788,7 @@ export default function Home() {
                       {cameraStatus === "loading"
                         ? "Loading live camera data..."
                         : cameraStatus === "ready"
-                          ? `${spots.length} mapped cameras loaded within ${config.cameraSearchRadiusMeters / 1000} km`
+                          ? `${spots.length} mapped cameras loaded within ${config.cameraSearchRadiusMiles} mi`
                           : cameraStatus === "error"
                             ? cameraError
                             : "Waiting for a location to load cameras"}
@@ -928,7 +1102,7 @@ export default function Home() {
           </div>
         )}
 
-        <div className="map-status">
+        <div className={`map-status${menuOpen ? " map-status-menu-open" : ""}`}>
           <div className="rounded-2xl border border-slate-700 bg-slate-950/80 p-3 shadow-xl backdrop-blur-sm">
             <div className="flex items-center justify-between gap-4">
               <div>

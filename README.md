@@ -11,11 +11,13 @@ FlockSpot is a privacy-first, frontend-only web app for finding mapped surveilla
 - Provides a Spot submission flow that warns on duplicates and points the user toward the public OpenStreetMap OAuth workflow.
 - Keeps every proximity calculation local to the browser and does not rely on a custom backend.
 
-## How DeFlock / OSM data is used
+## How map and DeFlock / OSM data are used
+
+You do not have to use OpenStreetMap as the basemap provider. FlockSpot currently uses a free, no-key CARTO raster basemap with labels removed, which is intentionally simple and still credits the underlying OpenStreetMap data. The map renderer is MapLibre, so the basemap can be replaced later without changing the camera logic.
 
 FlockSpot uses the public DeFlock / OpenStreetMap ecosystem as the source of mapped camera data, but it does not host or maintain a proprietary database. The app includes a central `config` value, `deflockTileUrl`, so the public tile source can be replaced later without spreading it through the codebase.
 
-In practice, the app is designed to be compatible with public vector-tile or viewport-based map data feeds and keeps the data access abstracted behind a configuration constant. This keeps the app deployable as a static frontend while making it straightforward to swap a source later.
+In practice, the app is designed to be compatible with public vector-tile or viewport-based map data feeds and keeps the data access abstracted behind a configuration constant. This keeps the app deployable as a static frontend while making it straightforward to swap a source later. The map's Light/Dark setting changes the basemap treatment without requiring a paid map-style account.
 
 ## How proximity alerts work
 

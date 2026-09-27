@@ -7,7 +7,8 @@ export const config = {
     "https://maps.deflock.org/tiles/deflock/{z}/{x}/{y}.pbf",
   defaultAlertDistanceFeet: 500,
   duplicateRadiusFeet: 50,
-  cameraSearchRadiusMeters: 10000,
+  cameraSearchRadiusMiles: 300,
+  cameraSearchRadiusMeters: 300 * 1609.344,
   initialLocationZoom: 14.5,
   locationUpdateDistanceMeters: 25,
   mapStyle: {
@@ -17,6 +18,7 @@ export const config = {
         type: "raster",
         tiles: ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"],
         tileSize: 256,
+        maxzoom: 19,
         attribution: "© OpenStreetMap contributors",
       },
     },

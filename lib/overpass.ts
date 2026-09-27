@@ -1,4 +1,7 @@
+import { distanceBetweenMeters } from "@/lib/geo";
 import type { Spot, UserLocation } from "@/types/spot";
+
+const DEFLOCK_ENDPOINTS = ["/api/deflock"];
 
 const OVERPASS_ENDPOINTS = [
   "https://overpass-api.de/api/interpreter",
@@ -7,7 +10,7 @@ const OVERPASS_ENDPOINTS = [
 
 function buildQuery(location: UserLocation, radiusMeters: number): string {
   const { latitude, longitude } = location;
-  return `[out:json][timeout:25];(nwr(around:${radiusMeters},${latitude},${longitude})["surveillance:type"="ALPR"];nwr(around:${radiusMeters},${latitude},${longitude})["camera:type"="ALPR"];nwr(around:${radiusMeters},${latitude},${longitude})[manufacturer~"Flock",i];);out center tags;`;
+  return `[out:json][timeout:25];(nwr(around:${radiusMeters},${latitude},${longitude})["surveillance:type"~"ALPR|camera",i];nwr(around:${radiusMeters},${latitude},${longitude})["camera:type"~"ALPR|plate",i];nwr(around:${radiusMeters},${latitude},${longitude})[manufacturer~"Flock",i];nwr(around:${radiusMeters},${latitude},${longitude})[operator~"Flock",i];);out center tags;`;
 }
 
 function getCoordinates(
@@ -76,19 +79,122 @@ function toSpot(element: OverpassElement): Spot | null {
   };
 }
 
+function toDeFlockSpot(feature: DeFlockFeature): Spot | null {
+  const coordinates = feature.geometry?.coordinates;
+  if (!Array.isArray(coordinates) || coordinates.length < 2) {
+    return null;
+  }
+
+  const longitude = Number(coordinates[0]);
+  const latitude = Number(coordinates[1]);
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+    return null;
+  }
+
+  const props = feature.properties ?? {};
+  if (props.isJunk) {
+    return null;
+  }
+
+  const label = props.type
+    ? `DeFlock ${String(props.type).toUpperCase()}`
+    : "DeFlock public data";
+
+  return {
+    id: `deflock-${props.id ?? `${latitude}-${longitude}`}`,
+    latitude,
+    longitude,
+    type: props.isInactive ? `${label} (inactive)` : label,
+    manufacturer: "DeFlock",
+    operator: props.state
+      ? `${props.city ?? "Public"}, ${props.state}`
+      : (props.city ?? "Public dataset"),
+    direction: undefined,
+    source: "DeFlock public dataset",
+    name:
+      props.name ??
+      `${props.city ?? "DeFlock"} ${props.state ? `(${props.state})` : ""}`.trim(),
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+async function fetchFromDeFlock(
+  location: UserLocation,
+  radiusMeters: number,
+  signal?: AbortSignal,
+): Promise<Spot[] | null> {
+  let lastError: unknown;
+  let receivedDataset = false;
+
+  for (const endpoint of DEFLOCK_ENDPOINTS) {
+    try {
+      const response = await fetch(endpoint, { signal, cache: "no-store" });
+      if (!response.ok) {
+        throw new Error(
+          `DeFlock public dataset request failed with HTTP ${response.status}.`,
+        );
+      }
+
+      const data = (await response.json()) as DeFlockFeatureCollection;
+      receivedDataset = true;
+      const spots = (data.features ?? [])
+        .map((feature) => toDeFlockSpot(feature))
+        .filter((spot): spot is Spot => Boolean(spot))
+        .filter(
+          (spot) =>
+            distanceBetweenMeters(location, {
+              latitude: spot.latitude,
+              longitude: spot.longitude,
+            }) <= radiusMeters,
+        );
+
+      console.info(
+        `[FlockSpot] DeFlock public dataset returned ${spots.length} nearby Markers from ${endpoint}.`,
+      );
+
+      if (spots.length > 0) {
+        return spots;
+      }
+    } catch (error: unknown) {
+      if (error instanceof DOMException && error.name === "AbortError") {
+        throw error;
+      }
+      lastError = error;
+    }
+  }
+
+  if (lastError instanceof Error) {
+    console.warn(
+      "[FlockSpot] DeFlock public data was unavailable; falling back to Overpass.",
+      lastError,
+    );
+  }
+
+  return receivedDataset ? [] : null;
+}
+
 export async function fetchNearbySpots(
   location: UserLocation,
   radiusMeters: number,
   signal?: AbortSignal,
 ): Promise<Spot[]> {
+  const deflockSpots = await fetchFromDeFlock(location, radiusMeters, signal);
+  if (deflockSpots !== null) {
+    return deflockSpots;
+  }
+
   let lastError: unknown;
 
   for (const endpoint of OVERPASS_ENDPOINTS) {
     try {
       const response = await fetch(endpoint, {
         method: "POST",
-        headers: { "Content-Type": "text/plain" },
-        body: buildQuery(location, radiusMeters),
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+        },
+        body: new URLSearchParams({
+          data: buildQuery(location, radiusMeters),
+        }).toString(),
         signal,
       });
 
@@ -108,7 +214,21 @@ export async function fetchNearbySpots(
         }
       }
 
-      return [...uniqueSpots.values()];
+      const spots = [...uniqueSpots.values()];
+      console.info(
+        `[FlockSpot] Overpass returned ${spots.length} camera spot(s) from ${endpoint}.`,
+      );
+      console.table(
+        spots.map((spot) => ({
+          id: spot.id,
+          latitude: spot.latitude,
+          longitude: spot.longitude,
+          direction: spot.direction ?? "unknown",
+          name: spot.name ?? "Unnamed",
+        })),
+      );
+
+      return spots;
     } catch (error: unknown) {
       if (error instanceof DOMException && error.name === "AbortError") {
         throw error;
@@ -121,6 +241,27 @@ export async function fetchNearbySpots(
     ? lastError
     : new Error("All camera data sources are unavailable.");
 }
+
+type DeFlockFeature = {
+  type?: string;
+  geometry?: {
+    type?: string;
+    coordinates?: [number, number];
+  };
+  properties?: {
+    id?: string;
+    name?: string;
+    city?: string;
+    state?: string;
+    type?: string;
+    isJunk?: boolean;
+    isInactive?: boolean;
+  };
+};
+
+type DeFlockFeatureCollection = {
+  features?: DeFlockFeature[];
+};
 
 type OverpassElement = {
   type: string;

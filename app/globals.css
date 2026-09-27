@@ -115,6 +115,88 @@ input:focus-visible {
   inset: 0;
 }
 
+.user-location-marker {
+  position: relative;
+  width: 2rem;
+  height: 2rem;
+  pointer-events: none;
+}
+
+.user-location-marker::before,
+.user-location-marker::after {
+  position: absolute;
+  content: "";
+  border-radius: 999px;
+}
+
+.user-location-marker::before {
+  inset: 0;
+  border: 2px solid rgba(134, 239, 172, 0.9);
+  background: rgba(34, 197, 94, 0.2);
+  animation: location-beacon 1.8s ease-out infinite;
+}
+
+.user-location-marker::after {
+  top: 0.75rem;
+  left: 0.75rem;
+  width: 0.5rem;
+  height: 0.5rem;
+  border: 2px solid #ffffff;
+  background: #22c55e;
+  box-shadow: 0 0 0 2px rgba(22, 163, 74, 0.85);
+}
+
+@keyframes location-beacon {
+  0% {
+    transform: scale(0.65);
+    opacity: 0.9;
+  }
+
+  100% {
+    transform: scale(1.7);
+    opacity: 0;
+  }
+}
+
+.map-loading {
+  position: absolute;
+  z-index: 5;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgba(2, 8, 23, 0.32);
+  pointer-events: none;
+}
+
+.map-loading-card {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.7rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 0.8rem;
+  background: rgba(5, 10, 16, 0.88);
+  color: #f8fafc;
+  font-size: 0.9rem;
+  box-shadow: 0 1rem 3rem rgba(0, 0, 0, 0.25);
+  backdrop-filter: blur(12px);
+}
+
+.map-loading-spinner {
+  width: 1rem;
+  height: 1rem;
+  border: 2px solid rgba(148, 163, 184, 0.35);
+  border-top-color: #22d3ee;
+  border-radius: 999px;
+  animation: loading-spin 0.8s linear infinite;
+}
+
+@keyframes loading-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .map-menu-button {
   position: absolute;
   z-index: 4;
@@ -173,7 +255,7 @@ input:focus-visible {
 }
 
 .map-status > div {
-  margin-left: auto;
+  margin: 0 auto;
   width: min(31rem, 100%);
   pointer-events: auto;
   background: rgba(5, 10, 16, 0.76);
