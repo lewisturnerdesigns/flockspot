@@ -296,21 +296,19 @@ const FlockSpotMap = forwardRef<FlockSpotMapHandle, FlockSpotMapProps>(function 
     const source = map.getSource(SPOTS_SOURCE) as maplibregl.GeoJSONSource | undefined;
     if (!source) return;
 
-    setMapReady(false);
+    source.setData(buildGeoJson(spots));
 
-    void source.setData(buildGeoJson(spots)).then(() => {
-      if (!spotsReady) return;
+    if (!spotsReady) return;
 
-      const reveal = () => {
-        if (map.isStyleLoaded() && map.areTilesLoaded() && source.loaded()) {
-          setMapReady(true);
-          map.off("idle", reveal);
-        }
-      };
+    const reveal = () => {
+      if (map.isStyleLoaded() && map.areTilesLoaded() && source.loaded()) {
+        setMapReady(true);
+        map.off("idle", reveal);
+      }
+    };
 
-      map.on("idle", reveal);
-      reveal();
-    });
+    map.on("idle", reveal);
+    reveal();
   }, [spots, spotsReady]);
 
   useEffect(() => {
@@ -352,10 +350,7 @@ const FlockSpotMap = forwardRef<FlockSpotMapHandle, FlockSpotMapProps>(function 
   }, [userLocation]);
 
   useEffect(() => {
-    if (!spotsReady) {
-      setMapReady(false);
-      return;
-    }
+    if (!spotsReady) return;
 
     const map = mapRef.current;
     const source = map?.getSource(SPOTS_SOURCE) as maplibregl.GeoJSONSource | undefined;
