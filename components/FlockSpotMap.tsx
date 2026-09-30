@@ -64,6 +64,7 @@ const FlockSpotMap = forwardRef<FlockSpotMapHandle, FlockSpotMapProps>(function 
   const mapRef = useRef<maplibregl.Map | null>(null);
   const initialLocationRef = useRef(userLocation);
   const latestLocationRef = useRef(userLocation);
+  const latestSpotsRef = useRef(spots);
   const latestFollowRef = useRef(followLocation);
   const queryTimerRef = useRef<number | null>(null);
   const [mapReady, setMapReady] = useState(false);
@@ -72,6 +73,10 @@ const FlockSpotMap = forwardRef<FlockSpotMapHandle, FlockSpotMapProps>(function 
   useEffect(() => {
     latestLocationRef.current = userLocation;
   }, [userLocation]);
+
+  useEffect(() => {
+    latestSpotsRef.current = spots;
+  }, [spots]);
 
   useEffect(() => {
     latestFollowRef.current = followLocation;
@@ -163,7 +168,7 @@ const FlockSpotMap = forwardRef<FlockSpotMapHandle, FlockSpotMapProps>(function 
       try {
         map.addSource(SPOTS_SOURCE, {
           type: "geojson",
-          data: buildGeoJson(spots),
+          data: buildGeoJson(latestSpotsRef.current),
         });
 
         map.addLayer({
