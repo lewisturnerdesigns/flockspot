@@ -1,11 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import * as maplibregl from "maplibre-gl";
-import "maplibre-gl/dist/maplibre-gl.css";
+import FlockSpotMap from "@/components/FlockSpotMap";
 import { config } from "@/config/config";
 import {
-  buildGeoJson,
   distanceBetweenMeters,
   feetToMeters,
   findNearbySpots,
@@ -36,18 +34,6 @@ function permissionState(): "granted" | "denied" | "prompt" | "unknown" {
   return "prompt";
 }
 
-function viewportRadius(map: maplibregl.Map) {
-  const center = map.getCenter();
-  const bounds = map.getBounds();
-  const centerPoint = { latitude: center.lat, longitude: center.lng };
-  const north = distanceBetweenMeters(centerPoint, { latitude: bounds.getNorth(), longitude: center.lng });
-  const east = distanceBetweenMeters(centerPoint, { latitude: center.lat, longitude: bounds.getEast() });
-  return Math.min(
-    config.cameraSearchRadiusMeters,
-    Math.max(5_000, Math.max(north, east) * config.viewportSearchPadding),
-  );
-}
-
 function Icon({ name, size = 18 }: { name: "locate" | "settings" | "plus" | "close" | "chevron" | "bell" | "map" | "list" | "sun" | "moon" | "camera"; size?: number }) {
   const common = { width: size, height: size, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.8, strokeLinecap: "round" as const, strokeLinejoin: "round" as const, "aria-hidden": true };
   switch (name) {
@@ -66,10 +52,7 @@ function Icon({ name, size = 18 }: { name: "locate" | "settings" | "plus" | "clo
 }
 
 export default function Home() {
-  const mapContainerRef = useRef<HTMLDivElement | null>(null);
-  const mapRef = useRef<maplibregl.Map | null>(null);
-  const spotsRef = useRef<Spot[]>([]);
-  const queryTimerRef = useRef<number | null>(null);
+  const mapRef = useRef<{ recenter: () => void; focusSpot: (spot: Spot) => void } | null>(null);
   const lastQueryRef = useRef<{ location: UserLocation; radiusMeters: number } | null>(null);
 
   const [theme, setTheme] = useState<Theme>(() => readLocalStorage(STORAGE_KEYS.theme, "dark"));
@@ -99,7 +82,6 @@ export default function Home() {
   const effectiveLocation = manualLocation ?? location;
   const initialMapLocationRef = useRef(effectiveLocation);
 
-  useEffect(() => { spotsRef.current = spots; }, [spots]);
   useEffect(() => { writeLocalStorage(STORAGE_KEYS.theme, theme); }, [theme]);
   useEffect(() => { writeLocalStorage(STORAGE_KEYS.settings, settings); }, [settings]);
   useEffect(() => { writeLocalStorage(STORAGE_KEYS.alertState, alertState); }, [alertState]);
@@ -152,113 +134,6 @@ export default function Home() {
   }, [effectiveLocation, loadSpots]);
 
   useEffect(() => {
-    if (!mapContainerRef.current) return;
-
-    const map = new maplibregl.Map({
-      container: mapContainerRef.current,
-      style: config.mapStyle,
-      center: initialMapLocationRef.current ? [initialMapLocationRef.current.longitude, initialMapLocationRef.current.latitude] : config.defaultCenter,
-      zoom: initialMapLocationRef.current ? config.initialLocationZoom : config.defaultZoom,
-      maxZoom: 19,
-      attributionControl: false,
-      dragRotate: false,
-    });
-    mapRef.current = map;
-    map.addControl(new maplibregl.NavigationControl({ showCompass: true, showZoom: true }), "top-right");
-    map.addControl(new maplibregl.AttributionControl({ compact: true }), "bottom-right");
-
-    map.on("load", () => {
-      map.addSource("spots-source", { type: "geojson", data: buildGeoJson(spotsRef.current) });
-      map.addLayer({
-        id: "spot-halo",
-        type: "circle",
-        source: "spots-source",
-        paint: {
-          "circle-color": "#fb5a24",
-          "circle-radius": ["interpolate", ["linear"], ["zoom"], 3, 7, 9, 10, 14, 14, 19, 20],
-          "circle-opacity": 0.22,
-        },
-      });
-      map.addLayer({
-        id: "spot-points",
-        type: "circle",
-        source: "spots-source",
-        paint: {
-          "circle-color": "#ff5a2f",
-          "circle-radius": ["interpolate", ["linear"], ["zoom"], 3, 4.5, 9, 6, 14, 7.5, 19, 10],
-          "circle-opacity": 0.98,
-          "circle-stroke-color": "#fff",
-          "circle-stroke-width": 2,
-        },
-      });
-      map.addLayer({
-        id: "spot-selected",
-        type: "circle",
-        source: "spots-source",
-        filter: ["==", ["get", "id"], ""],
-        paint: {
-          "circle-color": "#fff",
-          "circle-radius": ["interpolate", ["linear"], ["zoom"], 8, 9, 14, 12, 19, 15],
-          "circle-stroke-color": "#ff5a2f",
-          "circle-stroke-width": 3,
-        },
-      });
-      map.addSource("user-location-source", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
-      map.addLayer({ id: "user-location-accuracy", type: "circle", source: "user-location-source", paint: { "circle-radius": 28, "circle-color": "#22c55e", "circle-opacity": 0.09, "circle-stroke-color": "#22c55e", "circle-stroke-opacity": 0.25, "circle-stroke-width": 1 } });
-      map.addLayer({ id: "user-location", type: "circle", source: "user-location-source", paint: { "circle-radius": 7, "circle-color": "#22c55e", "circle-stroke-color": "#fff", "circle-stroke-width": 2.5 } });
-
-      map.on("click", "spot-points", (event) => {
-        const id = event.features?.[0]?.properties?.id;
-        if (id) {
-          setSelectedSpotId(String(id));
-          setPanel("map");
-        }
-      });
-      map.on("mouseenter", "spot-points", () => { map.getCanvas().style.cursor = "pointer"; });
-      map.on("mouseleave", "spot-points", () => { map.getCanvas().style.cursor = ""; });
-      map.on("dragstart", () => setFollowLocation(false));
-      map.on("moveend", () => {
-        if (queryTimerRef.current) window.clearTimeout(queryTimerRef.current);
-        queryTimerRef.current = window.setTimeout(() => {
-          void loadSpots({ latitude: map.getCenter().lat, longitude: map.getCenter().lng }, viewportRadius(map));
-        }, 350);
-      });
-    });
-
-    return () => {
-      if (queryTimerRef.current) window.clearTimeout(queryTimerRef.current);
-      map.remove();
-      mapRef.current = null;
-    };
-  }, [loadSpots]);
-
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map || !map.getSource("spots-source")) return;
-    (map.getSource("spots-source") as maplibregl.GeoJSONSource).setData(buildGeoJson(spots));
-  }, [spots]);
-
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map || !map.getLayer("spot-selected")) return;
-    map.setFilter("spot-selected", ["==", ["get", "id"], selectedSpotId ?? ""]);
-  }, [selectedSpotId]);
-
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map || !effectiveLocation || !map.getSource("user-location-source")) return;
-    const source = map.getSource("user-location-source") as maplibregl.GeoJSONSource;
-    source.setData({
-      type: "FeatureCollection",
-      features: [{ type: "Feature", properties: {}, geometry: { type: "Point", coordinates: [effectiveLocation.longitude, effectiveLocation.latitude] } }],
-    });
-
-    if (followLocation) {
-      map.easeTo({ center: [effectiveLocation.longitude, effectiveLocation.latitude], duration: 400, essential: true });
-    }
-  }, [effectiveLocation, followLocation]);
-
-  useEffect(() => {
     if (!effectiveLocation || !settings.enabled || spots.length === 0) return;
     const threshold = feetToMeters(settings.distanceFeet);
     const nearby = findNearbySpots(spots, effectiveLocation, threshold);
@@ -284,10 +159,12 @@ export default function Home() {
   };
 
   const recenter = () => {
-    if (!effectiveLocation || !mapRef.current) return;
-    setFollowLocation(true);
-    mapRef.current.easeTo({ center: [effectiveLocation.longitude, effectiveLocation.latitude], zoom: Math.max(mapRef.current.getZoom(), config.initialLocationZoom), duration: 450, essential: true });
+    mapRef.current?.recenter();
   };
+
+  const handleViewportChange = useCallback((queryLocation: UserLocation, radiusMeters: number) => {
+    void loadSpots(queryLocation, radiusMeters);
+  }, [loadSpots]);
 
   const enableNotifications = async () => {
     if (!("Notification" in window)) {
@@ -344,7 +221,22 @@ export default function Home() {
 
   return (
     <main className={`app-shell ${theme}`}>
-      <div ref={mapContainerRef} className="map-canvas" />
+      <FlockSpotMap
+        ref={mapRef}
+        spots={spots}
+        spotsReady={!effectiveLocation || cameraStatus === "ready" || cameraStatus === "error"}
+        userLocation={effectiveLocation}
+        selectedSpotId={selectedSpotId}
+        followLocation={followLocation}
+        recenterRequest={0}
+        focusSpot={null}
+        onSelectSpot={(id) => {
+          setSelectedSpotId(id);
+          setPanel("map");
+        }}
+        onFollowLocationChange={setFollowLocation}
+        onViewportChange={handleViewportChange}
+      />
 
       <header className="topbar">
         <button className="brand" type="button" onClick={() => openPanel("map")} aria-label="FlockSpot home">
@@ -402,7 +294,7 @@ export default function Home() {
           {panel === "nearby" && (
             <div className="panel-content">
               <div className="stat-card"><strong>{nearbySpots.length}</strong><span>within {settings.distanceFeet.toLocaleString()} ft alert range</span></div>
-              {nearbySpots.length === 0 ? <div className="empty-state"><span className="empty-icon"><Icon name="camera" /></span><h3>No cameras nearby</h3><p>Move the map or increase your alert distance to see more mapped locations.</p></div> : <div className="spot-list">{nearbySpots.map((spot) => <button key={spot.id} className={`spot-row ${spot.id === selectedSpotId ? "selected" : ""}`} onClick={() => { setSelectedSpotId(spot.id); setPanel("map"); mapRef.current?.easeTo({ center: [spot.longitude, spot.latitude], zoom: Math.max(mapRef.current.getZoom(), 15), duration: 500 }); }}><span className="spot-row-dot" /><span className="spot-row-text"><strong>{spot.name ?? "Mapped camera"}</strong><small>{spot.operator ?? spot.source ?? "Public data"}</small></span><span className="spot-row-distance">{formatDistance(spot.distanceMeters, settings.units)}<Icon name="chevron" size={14} /></span></button>)}</div>}
+              {nearbySpots.length === 0 ? <div className="empty-state"><span className="empty-icon"><Icon name="camera" /></span><h3>No cameras nearby</h3><p>Move the map or increase your alert distance to see more mapped locations.</p></div> : <div className="spot-list">{nearbySpots.map((spot) => <button key={spot.id} className={`spot-row ${spot.id === selectedSpotId ? "selected" : ""}`} onClick={() => { setSelectedSpotId(spot.id); setPanel("map"); mapRef.current?.focusSpot(spot); }}><span className="spot-row-dot" /><span className="spot-row-text"><strong>{spot.name ?? "Mapped camera"}</strong><small>{spot.operator ?? spot.source ?? "Public data"}</small></span><span className="spot-row-distance">{formatDistance(spot.distanceMeters, settings.units)}<Icon name="chevron" size={14} /></span></button>)}</div>}
             </div>
           )}
 
