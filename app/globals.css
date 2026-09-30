@@ -178,3 +178,67 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
   .bottom-nav { left: max(16px, env(safe-area-inset-left)); transform: none; width: 260px; }
   .spot-card { bottom: 24px; left: 50%; }
 }
+
+
+/* FlockSpot tech-map treatment */
+.map-shell::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  background:
+    linear-gradient(rgba(0, 255, 170, 0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 255, 170, 0.025) 1px, transparent 1px),
+    linear-gradient(180deg, rgba(0, 0, 0, 0.18), transparent 24%, transparent 76%, rgba(0, 0, 0, 0.24));
+  background-size: 48px 48px, 48px 48px, 100% 100%;
+  mix-blend-mode: screen;
+}
+.map-shell::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+  background:
+    repeating-linear-gradient(
+      180deg,
+      transparent 0,
+      transparent 3px,
+      rgba(0, 255, 170, 0.018) 4px
+    ),
+    radial-gradient(circle at 50% 45%, transparent 0 42%, rgba(0, 0, 0, 0.32) 100%);
+}
+.map-shell .map-canvas {
+  filter: saturate(0.82) contrast(1.08) brightness(0.88);
+}
+.map-shell[data-ready="false"] .map-canvas {
+  opacity: 0;
+}
+.map-shell[data-ready="true"] .map-canvas {
+  opacity: 1;
+  transition: opacity 220ms ease-out;
+}
+.maplibregl-ctrl-group {
+  overflow: hidden;
+  border: 1px solid rgba(0, 255, 170, 0.22) !important;
+  border-radius: 12px !important;
+  background: rgba(5, 12, 14, 0.78) !important;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35) !important;
+  backdrop-filter: blur(14px);
+}
+.maplibregl-ctrl-group button {
+  border-color: rgba(0, 255, 170, 0.12) !important;
+  background: transparent !important;
+  filter: invert(1) sepia(1) saturate(0.2) hue-rotate(90deg);
+}
+.maplibregl-ctrl-attrib {
+  border: 1px solid rgba(0, 255, 170, 0.16) !important;
+  border-radius: 9px !important;
+  background: rgba(5, 12, 14, 0.72) !important;
+  color: rgba(220, 255, 244, 0.65) !important;
+  backdrop-filter: blur(10px);
+}
+.maplibregl-ctrl-attrib a {
+  color: rgba(0, 255, 170, 0.8) !important;
+}
