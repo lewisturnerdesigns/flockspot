@@ -24,6 +24,16 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .app-shell { position: relative; width: 100%; height: 100dvh; overflow: hidden; background: var(--bg); }
 .app-shell.light { --bg: #eef1f2; --surface: rgba(255,255,255,.91); --surface-solid: #fff; --surface-soft: rgba(18,33,43,.055); --border: rgba(18,33,43,.11); --text: #152029; --muted: #65727b; --shadow: 0 24px 60px rgba(18,33,43,.16); }
 .map-canvas { position: absolute; inset: 0; }
+.map-shell { position: absolute; inset: 0; overflow: hidden; background: var(--bg); }
+.map-shell .map-canvas { position: absolute; inset: 0; }
+.map-loading-overlay { position: absolute; inset: 0; z-index: 20; display: grid; place-items: center; background: var(--bg); }
+.map-loading-card { display: flex; flex-direction: column; align-items: center; gap: 8px; width: min(300px, calc(100% - 40px)); padding: 24px; border: 1px solid var(--border); border-radius: 18px; background: var(--surface); box-shadow: var(--shadow); text-align: center; backdrop-filter: blur(20px); }
+.map-loading-card strong { font-size: 13px; }
+.map-loading-card span { color: var(--muted); font-size: 10px; line-height: 1.5; }
+.map-loading-spinner { width: 24px; height: 24px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: map-loading-spin .8s linear infinite; }
+.map-loading-card button { margin-top: 4px; padding: 9px 14px; border-radius: 10px; color: #fff; background: var(--accent); font-size: 11px; font-weight: 700; }
+.map-error-card span { color: var(--muted); }
+@keyframes map-loading-spin { to { transform: rotate(360deg); } }
 
 .topbar { position: absolute; z-index: 10; top: max(16px, env(safe-area-inset-top)); left: max(16px, env(safe-area-inset-left)); right: max(16px, env(safe-area-inset-right)); display: flex; align-items: center; justify-content: space-between; pointer-events: none; }
 .brand, .topbar-status, .topbar-actions, .map-tools, .spot-card, .quick-menu, .side-panel, .bottom-nav, .alert-toast, .data-warning, .location-prompt { pointer-events: auto; }
