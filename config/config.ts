@@ -14,10 +14,10 @@ export const config = {
     sources: {
       openstreetmap: {
         type: "raster",
-        tiles: ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"],
+        tiles: ["https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png"],
         tileSize: 256,
-        maxzoom: 19,
-        attribution: "© OpenStreetMap contributors",
+        maxzoom: 20,
+        attribution: "© OpenStreetMap contributors © CARTO",
       },
     },
     layers: [{ id: "openstreetmap", type: "raster", source: "openstreetmap" }],
