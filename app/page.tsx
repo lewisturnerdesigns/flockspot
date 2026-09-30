@@ -80,8 +80,6 @@ export default function Home() {
   const [submissionMessage, setSubmissionMessage] = useState("");
 
   const effectiveLocation = manualLocation ?? location;
-  const initialMapLocationRef = useRef(effectiveLocation);
-
   useEffect(() => { writeLocalStorage(STORAGE_KEYS.theme, theme); }, [theme]);
   useEffect(() => { writeLocalStorage(STORAGE_KEYS.settings, settings); }, [settings]);
   useEffect(() => { writeLocalStorage(STORAGE_KEYS.alertState, alertState); }, [alertState]);
@@ -162,6 +160,11 @@ export default function Home() {
     mapRef.current?.recenter();
   };
 
+  const handleMapSelect = useCallback((id: string) => {
+    setSelectedSpotId(id);
+    setPanel("map");
+  }, []);
+
   const handleViewportChange = useCallback((queryLocation: UserLocation, radiusMeters: number) => {
     void loadSpots(queryLocation, radiusMeters);
   }, [loadSpots]);
@@ -228,12 +231,7 @@ export default function Home() {
         userLocation={effectiveLocation}
         selectedSpotId={selectedSpotId}
         followLocation={followLocation}
-        recenterRequest={0}
-        focusSpot={null}
-        onSelectSpot={(id) => {
-          setSelectedSpotId(id);
-          setPanel("map");
-        }}
+        onSelectSpot={handleMapSelect}
         onFollowLocationChange={setFollowLocation}
         onViewportChange={handleViewportChange}
       />
