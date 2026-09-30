@@ -1,20 +1,25 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 import * as maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { config } from "@/config/config";
 import { buildGeoJson, distanceBetweenMeters } from "@/lib/geo";
 import type { Spot, UserLocation } from "@/types/spot";
 
+maplibregl.setWorkerUrl("/maplibre/maplibre-gl-worker.mjs");
+
+export type FlockSpotMapHandle = {
+  recenter: () => void;
+  focusSpot: (spot: Spot) => void;
+};
+
 type FlockSpotMapProps = {
   spots: Spot[];
-  spotsLoading: boolean;
+  spotsReady: boolean;
   userLocation: UserLocation | null;
   selectedSpotId: string | null;
   followLocation: boolean;
-  recenterRequest: number;
-  focusSpot: Spot | null;
   onSelectSpot: (id: string) => void;
   onFollowLocationChange: (following: boolean) => void;
   onViewportChange: (location: UserLocation, radiusMeters: number) => void;
@@ -42,29 +47,69 @@ function viewportRadius(map: maplibregl.Map) {
   );
 }
 
-export default function FlockSpotMap({
-  spots,
-  spotsLoading,
-  userLocation,
-  selectedSpotId,
-  followLocation,
-  recenterRequest,
-  focusSpot,
-  onSelectSpot,
-  onFollowLocationChange,
-  onViewportChange,
-}: FlockSpotMapProps) {
+const FlockSpotMap = forwardRef<FlockSpotMapHandle, FlockSpotMapProps>(function FlockSpotMap(
+  {
+    spots,
+    spotsReady,
+    userLocation,
+    selectedSpotId,
+    followLocation,
+    onSelectSpot,
+    onFollowLocationChange,
+    onViewportChange,
+  },
+  ref,
+) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const initialLocationRef = useRef(userLocation);
-  const hasCenteredOnLocationRef = useRef(false);
+  const latestLocationRef = useRef(userLocation);
+  const latestFollowRef = useRef(followLocation);
   const queryTimerRef = useRef<number | null>(null);
   const [mapReady, setMapReady] = useState(false);
   const [mapError, setMapError] = useState<string | null>(null);
 
   useEffect(() => {
+    latestLocationRef.current = userLocation;
+  }, [userLocation]);
+
+  useEffect(() => {
+    latestFollowRef.current = followLocation;
+  }, [followLocation]);
+
+  useImperativeHandle(ref, () => ({
+    recenter() {
+      const map = mapRef.current;
+      const location = latestLocationRef.current;
+      if (!map || !location) return;
+
+      onFollowLocationChange(true);
+      map.easeTo({
+        center: [location.longitude, location.latitude],
+        zoom: Math.max(map.getZoom(), config.initialLocationZoom),
+        duration: 450,
+        essential: true,
+      });
+    },
+    focusSpot(spot) {
+      const map = mapRef.current;
+      if (!map) return;
+
+      onSelectSpot(spot.id);
+      onFollowLocationChange(false);
+      map.easeTo({
+        center: [spot.longitude, spot.latitude],
+        zoom: Math.max(map.getZoom(), 15),
+        duration: 500,
+        essential: true,
+      });
+    },
+  }), [onFollowLocationChange, onSelectSpot]);
+
+  useEffect(() => {
     if (!containerRef.current) return;
 
+    let cancelled = false;
     setMapReady(false);
     setMapError(null);
 
@@ -74,40 +119,52 @@ export default function FlockSpotMap({
       center: initialLocationRef.current
         ? [initialLocationRef.current.longitude, initialLocationRef.current.latitude]
         : config.defaultCenter,
-      zoom: initialLocationRef.current
-        ? config.initialLocationZoom
-        : config.defaultZoom,
+      zoom: initialLocationRef.current ? config.initialLocationZoom : config.defaultZoom,
       maxZoom: 19,
       attributionControl: false,
       dragRotate: false,
-      failIfMajorPerformanceCaveat: false,
     });
 
     mapRef.current = map;
+
     map.addControl(
       new maplibregl.NavigationControl({ showCompass: true, showZoom: true }),
       "top-right",
     );
     map.addControl(new maplibregl.AttributionControl({ compact: true }), "bottom-right");
 
-    const checkReady = () => {
-      if (spotsLoading || !map.isStyleLoaded() || !map.areTilesLoaded()) return;
+    const revealWhenReady = () => {
+      if (cancelled || !spotsReady) return;
+      if (!map.isStyleLoaded() || !map.areTilesLoaded()) return;
 
-      const source = map.getSource(SPOTS_SOURCE);
+      const source = map.getSource(SPOTS_SOURCE) as maplibregl.GeoJSONSource | undefined;
       if (!source || !source.loaded()) return;
 
       setMapReady(true);
-      map.off("idle", checkReady);
+    };
+
+    const handleMoveEnd = () => {
+      if (queryTimerRef.current) {
+        window.clearTimeout(queryTimerRef.current);
+      }
+
+      queryTimerRef.current = window.setTimeout(() => {
+        onViewportChange(
+          {
+            latitude: map.getCenter().lat,
+            longitude: map.getCenter().lng,
+          },
+          viewportRadius(map),
+        );
+      }, 350);
     };
 
     const handleLoad = () => {
       try {
-        if (!map.getSource(SPOTS_SOURCE)) {
-          map.addSource(SPOTS_SOURCE, {
-            type: "geojson",
-            data: buildGeoJson(spots),
-          });
-        }
+        map.addSource(SPOTS_SOURCE, {
+          type: "geojson",
+          data: buildGeoJson(spots),
+        });
 
         map.addLayer({
           id: "spot-halo",
@@ -179,7 +236,9 @@ export default function FlockSpotMap({
 
         map.on("click", "spot-points", (event) => {
           const id = event.features?.[0]?.properties?.id;
-          if (id) onSelectSpot(String(id));
+          if (id) {
+            onSelectSpot(String(id));
+          }
         });
 
         map.on("mouseenter", "spot-points", () => {
@@ -193,45 +252,37 @@ export default function FlockSpotMap({
         map.on("dragstart", () => onFollowLocationChange(false));
         map.on("wheel", () => onFollowLocationChange(false));
         map.on("touchstart", () => onFollowLocationChange(false));
+        map.on("moveend", handleMoveEnd);
+        map.on("idle", revealWhenReady);
 
-        map.on("moveend", () => {
-          if (queryTimerRef.current) window.clearTimeout(queryTimerRef.current);
-          queryTimerRef.current = window.setTimeout(() => {
-            onViewportChange(
-              {
-                latitude: map.getCenter().lat,
-                longitude: map.getCenter().lng,
-              },
-              viewportRadius(map),
-            );
-          }, 350);
-        });
-
-        map.on("idle", checkReady);
-        checkReady();
+        revealWhenReady();
       } catch (error) {
-        setMapError(error instanceof Error ? error.message : "The map could not be initialized.");
+        console.error("FlockSpot: map initialization failed", error);
+        if (!cancelled) {
+          setMapError(error instanceof Error ? error.message : "The map could not be initialized.");
+        }
       }
     };
 
-    map.on("load", handleLoad);
-
-    map.on("error", (event) => {
-      const message =
-        event.error instanceof Error
-          ? event.error.message
-          : "Map tiles or map data could not be loaded.";
+    const handleError = (event: maplibregl.ErrorEvent) => {
       console.error("FlockSpot MapLibre error:", event.error);
-      setMapError(message);
-    });
+      if (!cancelled) {
+        setMapError(event.error?.message || "Map tiles or map data could not be loaded.");
+      }
+    };
+
+    map.on("error", handleError);
+    map.once("load", handleLoad);
 
     return () => {
-      if (queryTimerRef.current) window.clearTimeout(queryTimerRef.current);
-      map.off("idle", checkReady);
+      cancelled = true;
+      if (queryTimerRef.current) {
+        window.clearTimeout(queryTimerRef.current);
+      }
       map.remove();
       mapRef.current = null;
     };
-  }, [onFollowLocationChange, onSelectSpot, onViewportChange, spots, spotsLoading]);
+  }, [onFollowLocationChange, onSelectSpot, onViewportChange]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -241,16 +292,21 @@ export default function FlockSpotMap({
     if (!source) return;
 
     setMapReady(false);
+
     void source.setData(buildGeoJson(spots)).then(() => {
-      if (!spotsLoading && map.loaded()) {
-        map.once("idle", () => {
-          if (map.isStyleLoaded() && map.areTilesLoaded() && source.loaded()) {
-            setMapReady(true);
-          }
-        });
-      }
+      if (!spotsReady) return;
+
+      const reveal = () => {
+        if (map.isStyleLoaded() && map.areTilesLoaded() && source.loaded()) {
+          setMapReady(true);
+          map.off("idle", reveal);
+        }
+      };
+
+      map.on("idle", reveal);
+      reveal();
     });
-  }, [spots, spotsLoading]);
+  }, [spots, spotsReady]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -261,9 +317,11 @@ export default function FlockSpotMap({
 
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || !userLocation || !map.getSource(USER_SOURCE)) return;
+    if (!map || !userLocation) return;
 
-    const source = map.getSource(USER_SOURCE) as maplibregl.GeoJSONSource;
+    const source = map.getSource(USER_SOURCE) as maplibregl.GeoJSONSource | undefined;
+    if (!source) return;
+
     void source.setData({
       type: "FeatureCollection",
       features: [
@@ -278,46 +336,40 @@ export default function FlockSpotMap({
       ],
     });
 
-    if (followLocation) {
-      const firstLocation = !hasCenteredOnLocationRef.current;
-      hasCenteredOnLocationRef.current = true;
-
+    if (latestFollowRef.current) {
       map.easeTo({
         center: [userLocation.longitude, userLocation.latitude],
-        zoom: firstLocation
-          ? Math.max(config.initialLocationZoom, 15)
-          : Math.max(map.getZoom(), config.initialLocationZoom),
-        duration: firstLocation ? 0 : 400,
+        zoom: Math.max(map.getZoom(), config.initialLocationZoom),
+        duration: 400,
         essential: true,
       });
     }
-  }, [followLocation, userLocation]);
+  }, [userLocation]);
 
   useEffect(() => {
+    if (!spotsReady) {
+      setMapReady(false);
+      return;
+    }
+
     const map = mapRef.current;
-    if (!map || !focusSpot) return;
+    const source = map?.getSource(SPOTS_SOURCE) as maplibregl.GeoJSONSource | undefined;
+    if (!map || !source) return;
 
-    map.easeTo({
-      center: [focusSpot.longitude, focusSpot.latitude],
-      zoom: Math.max(map.getZoom(), 15),
-      duration: 500,
-      essential: true,
-    });
-  }, [focusSpot]);
+    const reveal = () => {
+      if (map.isStyleLoaded() && map.areTilesLoaded() && source.loaded()) {
+        setMapReady(true);
+        map.off("idle", reveal);
+      }
+    };
 
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map || !userLocation) return;
-    if (recenterRequest <= 0) return;
+    map.on("idle", reveal);
+    reveal();
 
-    onFollowLocationChange(true);
-    map.easeTo({
-      center: [userLocation.longitude, userLocation.latitude],
-      zoom: Math.max(map.getZoom(), config.initialLocationZoom),
-      duration: 450,
-      essential: true,
-    });
-  }, [onFollowLocationChange, recenterRequest, userLocation]);
+    return () => {
+      map.off("idle", reveal);
+    };
+  }, [spotsReady]);
 
   return (
     <div className="map-shell" data-ready={mapReady ? "true" : "false"}>
@@ -327,7 +379,7 @@ export default function FlockSpotMap({
         <div className="map-loading-overlay" aria-live="polite">
           <div className="map-loading-card">
             <span className="map-loading-spinner" />
-            <strong>{spotsLoading ? "Loading camera data…" : "Loading map…"}</strong>
+            <strong>{spotsReady ? "Loading map…" : "Loading camera data…"}</strong>
             <span>Preparing map tiles and camera locations</span>
           </div>
         </div>
@@ -346,4 +398,6 @@ export default function FlockSpotMap({
       )}
     </div>
   );
-}
+});
+
+export default FlockSpotMap;
