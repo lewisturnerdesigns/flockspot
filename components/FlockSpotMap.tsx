@@ -12,6 +12,7 @@ maplibregl.setWorkerUrl("/maplibre/maplibre-gl-worker.mjs");
 export type FlockSpotMapHandle = {
   recenter: () => void;
   focusSpot: (spot: Spot) => void;
+  findNearbyCameras: (location: UserLocation, radiusMeters: number) => Spot[];
   findNearbyCamera: (location: UserLocation, radiusMeters: number) => Spot | null;
 };
 
@@ -24,6 +25,7 @@ type FlockSpotMapProps = {
   onSelectSpot: (id: string) => void;
   onFollowLocationChange: (following: boolean) => void;
   onViewportChange: (location: UserLocation, radiusMeters: number) => void;
+  onLoadedCameras: (spots: Spot[]) => void;
 };
 
 const SPOTS_SOURCE = "spots-source";
@@ -58,6 +60,7 @@ const FlockSpotMap = forwardRef<FlockSpotMapHandle, FlockSpotMapProps>(function 
     onSelectSpot,
     onFollowLocationChange,
     onViewportChange,
+    onLoadedCameras,
   },
   ref,
 ) {
@@ -97,15 +100,15 @@ const FlockSpotMap = forwardRef<FlockSpotMapHandle, FlockSpotMapProps>(function 
         essential: true,
       });
     },
-    findNearbyCamera(location, radiusMeters) {
+    findNearbyCameras(location, radiusMeters) {
       const map = mapRef.current;
-      if (!map || !map.isStyleLoaded()) return null;
+      if (!map || !map.isStyleLoaded()) return [];
 
       const features = map.querySourceFeatures("deflockCameras", {
         sourceLayer: "cameras",
       });
-      let closest: Spot | null = null;
-      let closestDistance = radiusMeters;
+      const seen = new Set<string>();
+      const nearby: Spot[] = [];
 
       for (const feature of features) {
         const geometry = feature.geometry;
@@ -113,15 +116,18 @@ const FlockSpotMap = forwardRef<FlockSpotMapHandle, FlockSpotMapProps>(function 
         const [longitude, latitude] = geometry.coordinates;
         if (typeof latitude !== "number" || typeof longitude !== "number") continue;
 
-        const distanceMeters = distanceBetweenMeters(location, { latitude, longitude });
-        if (distanceMeters > closestDistance) continue;
-
         const properties = feature.properties ?? {};
         const osmType = String(properties.osmType ?? "node");
         const osmId = String(properties.osmId ?? `${latitude.toFixed(6)}-${longitude.toFixed(6)}`);
-        closestDistance = distanceMeters;
-        closest = {
-          id: `deflock-${osmType}-${osmId}`,
+        const id = `deflock-${osmType}-${osmId}`;
+        if (seen.has(id)) continue;
+
+        const distanceMeters = distanceBetweenMeters(location, { latitude, longitude });
+        if (distanceMeters > radiusMeters) continue;
+
+        seen.add(id);
+        nearby.push({
+          id,
           latitude,
           longitude,
           type: "ALPR",
@@ -130,10 +136,15 @@ const FlockSpotMap = forwardRef<FlockSpotMapHandle, FlockSpotMapProps>(function 
           source: "DeFlock camera tiles",
           name: properties.ref ? String(properties.ref) : "Flock camera",
           direction: typeof properties.direction === "number" ? properties.direction : undefined,
-        };
+        });
       }
 
-      return closest;
+      return nearby.sort(
+        (a, b) => distanceBetweenMeters(location, a) - distanceBetweenMeters(location, b),
+      );
+    },
+    findNearbyCamera(location, radiusMeters) {
+      return this.findNearbyCameras(location, radiusMeters)[0] ?? null;
     },
     focusSpot(spot) {
       const map = mapRef.current;
@@ -177,6 +188,44 @@ const FlockSpotMap = forwardRef<FlockSpotMapHandle, FlockSpotMapProps>(function 
     );
     map.addControl(new maplibregl.AttributionControl({ compact: true }), "bottom-right");
 
+    const emitLoadedCameras = () => {
+      if (!map.isStyleLoaded()) return;
+
+      const features = map.querySourceFeatures("deflockCameras", {
+        sourceLayer: "cameras",
+      });
+      const seen = new Set<string>();
+      const loaded: Spot[] = [];
+
+      for (const feature of features) {
+        const geometry = feature.geometry;
+        if (geometry.type !== "Point") continue;
+        const [longitude, latitude] = geometry.coordinates;
+        if (typeof latitude !== "number" || typeof longitude !== "number") continue;
+
+        const properties = feature.properties ?? {};
+        const osmType = String(properties.osmType ?? "node");
+        const osmId = String(properties.osmId ?? `${latitude.toFixed(6)}-${longitude.toFixed(6)}`);
+        const id = `deflock-${osmType}-${osmId}`;
+        if (seen.has(id)) continue;
+
+        seen.add(id);
+        loaded.push({
+          id,
+          latitude,
+          longitude,
+          type: "ALPR",
+          manufacturer: properties.brand ? String(properties.brand) : "Flock Safety",
+          operator: properties.operator ? String(properties.operator) : "DeFlock / OpenStreetMap",
+          source: "DeFlock camera tiles",
+          name: properties.ref ? String(properties.ref) : "Flock camera",
+          direction: typeof properties.direction === "number" ? properties.direction : undefined,
+        });
+      }
+
+      onLoadedCameras(loaded);
+    };
+
     const revealWhenReady = () => {
       if (cancelled) return;
       if (!map.isStyleLoaded() || !map.areTilesLoaded()) return;
@@ -184,6 +233,7 @@ const FlockSpotMap = forwardRef<FlockSpotMapHandle, FlockSpotMapProps>(function 
       const source = map.getSource(SPOTS_SOURCE) as maplibregl.GeoJSONSource | undefined;
       if (!source || !source.loaded()) return;
 
+      emitLoadedCameras();
       setMapReady(true);
     };
 
@@ -326,7 +376,7 @@ const FlockSpotMap = forwardRef<FlockSpotMapHandle, FlockSpotMapProps>(function 
       map.remove();
       mapRef.current = null;
     };
-  }, [onFollowLocationChange, onSelectSpot, onViewportChange]);
+  }, [onFollowLocationChange, onSelectSpot, onViewportChange, onLoadedCameras]);
 
   useEffect(() => {
     const map = mapRef.current;
