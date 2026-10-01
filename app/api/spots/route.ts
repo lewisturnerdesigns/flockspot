@@ -5,9 +5,12 @@ const DEFLOCK_DATASET_URL = "https://deflockdata.dontgetflocked.com/sharing-netw
 const OVERPASS_ENDPOINTS = [
   "https://overpass-api.de/api/interpreter",
   "https://overpass.kumi.systems/api/interpreter",
+  "https://overpass.private.coffee/api/interpreter",
 ];
 const MAX_QUERY_RADIUS_METERS = 300 * 1609.344;
-const OVERPASS_FALLBACK_RADIUS_METERS = 50_000;
+const OVERPASS_CHUNK_RADIUS_METERS = 50_000;
+const OVERPASS_DUPLICATE_RADIUS_METERS = 40;
+const OVERPASS_RETRIES = 2;
 
 type GeoJsonFeature = {
   geometry?: { coordinates?: unknown };
@@ -99,6 +102,31 @@ function filterNearby(spots: Spot[], latitude: number, longitude: number, radius
   return spots.filter((spot) => distanceBetweenMeters(origin, spot) <= radiusMeters);
 }
 
+function coordinateKey(spot: Spot) {
+  return `${spot.latitude.toFixed(5)}:${spot.longitude.toFixed(5)}`;
+}
+
+function mergeSpots(primary: Spot[], secondary: Spot[]) {
+  const merged: Spot[] = [];
+  const keys = new Set<string>();
+
+  for (const spot of [...primary, ...secondary]) {
+    const key = coordinateKey(spot);
+    if (keys.has(key)) continue;
+
+    const duplicate = merged.some(
+      (existing) => distanceBetweenMeters(existing, spot) <= OVERPASS_DUPLICATE_RADIUS_METERS,
+    );
+
+    if (duplicate) continue;
+
+    keys.add(key);
+    merged.push(spot);
+  }
+
+  return merged;
+}
+
 async function fetchDeFlock(signal: AbortSignal) {
   const response = await fetch(DEFLOCK_DATASET_URL, {
     headers: { Accept: "application/geo+json, application/json" },
@@ -115,40 +143,105 @@ async function fetchDeFlock(signal: AbortSignal) {
     .filter((spot): spot is Spot => Boolean(spot));
 }
 
-function buildOverpassQuery(latitude: number, longitude: number, radiusMeters: number) {
-  return `[out:json][timeout:25];(nwr(around:${radiusMeters},${latitude},${longitude})["surveillance:type"~"ALPR|camera",i];nwr(around:${radiusMeters},${latitude},${longitude})["camera:type"~"ALPR|plate",i];nwr(around:${radiusMeters},${latitude},${longitude})[manufacturer~"Flock",i];nwr(around:${radiusMeters},${latitude},${longitude})[operator~"Flock",i];);out center tags;`;
-}
+function buildSearchPoints(latitude: number, longitude: number, radiusMeters: number) {
+  const points: Array<[number, number]> = [[latitude, longitude]];
+  const offsets = [
+    [0, 1],
+    [0, -1],
+    [1, 0],
+    [-1, 0],
+    [1, 1],
+    [1, -1],
+    [-1, 1],
+    [-1, -1],
+  ];
 
-async function fetchOverpass(latitude: number, longitude: number, radiusMeters: number, signal: AbortSignal) {
-  const radius = Math.min(radiusMeters, OVERPASS_FALLBACK_RADIUS_METERS);
-  let lastError: unknown;
+  const stepDegrees = (OVERPASS_CHUNK_RADIUS_METERS * 1.35) / 111_320;
+  const longitudeStep = stepDegrees / Math.max(0.25, Math.cos((latitude * Math.PI) / 180));
 
-  for (const endpoint of OVERPASS_ENDPOINTS) {
-    try {
-      const response = await fetch(endpoint, {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" },
-        body: new URLSearchParams({ data: buildOverpassQuery(latitude, longitude, radius) }).toString(),
-        signal,
-      });
+  for (const [latOffset, lngOffset] of offsets) {
+    const pointLatitude = latitude + latOffset * stepDegrees;
+    const pointLongitude = longitude + lngOffset * longitudeStep;
 
-      if (!response.ok) throw new Error(`Overpass returned HTTP ${response.status}.`);
-      const data = (await response.json()) as { elements?: OverpassElement[] };
-      const unique = new Map<string, Spot>();
-
-      for (const element of data.elements ?? []) {
-        const spot = toOverpassSpot(element);
-        if (spot) unique.set(spot.id, spot);
-      }
-
-      return [...unique.values()];
-    } catch (error) {
-      if (error instanceof DOMException && error.name === "AbortError") throw error;
-      lastError = error;
+    if (distanceBetweenMeters(
+      { latitude, longitude },
+      { latitude: pointLatitude, longitude: pointLongitude },
+    ) <= radiusMeters + OVERPASS_CHUNK_RADIUS_METERS) {
+      points.push([pointLatitude, pointLongitude]);
     }
   }
 
-  throw lastError instanceof Error ? lastError : new Error("Camera data sources are unavailable.");
+  return points;
+}
+
+function buildOverpassQuery(points: Array<[number, number]>) {
+  const clauses = points.flatMap(([latitude, longitude]) => [
+    `nwr(around:${OVERPASS_CHUNK_RADIUS_METERS},${latitude},${longitude})["surveillance:type"~"ALPR|camera",i]`,
+    `nwr(around:${OVERPASS_CHUNK_RADIUS_METERS},${latitude},${longitude})["camera:type"~"ALPR|plate",i]`,
+    `nwr(around:${OVERPASS_CHUNK_RADIUS_METERS},${latitude},${longitude})[manufacturer~"Flock",i]`,
+    `nwr(around:${OVERPASS_CHUNK_RADIUS_METERS},${latitude},${longitude})[operator~"Flock",i]`,
+  ]);
+
+  return `[out:json][timeout:25];(${clauses.join(";")};);out center tags;`;
+}
+
+async function fetchOverpass(
+  latitude: number,
+  longitude: number,
+  radiusMeters: number,
+  signal: AbortSignal,
+) {
+  const points = buildSearchPoints(
+    latitude,
+    longitude,
+    Math.min(radiusMeters, MAX_QUERY_RADIUS_METERS),
+  );
+
+  let lastError: unknown;
+
+  for (const endpoint of OVERPASS_ENDPOINTS) {
+    for (let attempt = 0; attempt <= OVERPASS_RETRIES; attempt += 1) {
+      try {
+        const response = await fetch(endpoint, {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" },
+          body: new URLSearchParams({ data: buildOverpassQuery(points) }).toString(),
+          signal,
+        });
+
+        if (response.status === 429) {
+          const retryAfter = Number(response.headers.get("Retry-After"));
+          const delayMs = Number.isFinite(retryAfter)
+            ? Math.min(Math.max(retryAfter * 1000, 500), 5000)
+            : 1200 * (attempt + 1);
+
+          if (attempt < OVERPASS_RETRIES) {
+            await new Promise((resolve) => setTimeout(resolve, delayMs));
+            continue;
+          }
+        }
+
+        if (!response.ok) {
+          throw new Error(`Overpass returned HTTP ${response.status}.`);
+        }
+
+        const data = (await response.json()) as { elements?: OverpassElement[] };
+        const spots = (data.elements ?? [])
+          .map(toOverpassSpot)
+          .filter((spot): spot is Spot => Boolean(spot));
+
+        return filterNearby(spots, latitude, longitude, radiusMeters);
+      } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError") throw error;
+        lastError = error;
+        break;
+      }
+    }
+  }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new Error("Camera data sources are unavailable.");
 }
 
 export async function GET(request: Request) {
@@ -165,31 +258,67 @@ export async function GET(request: Request) {
   const radiusMeters = Number.isFinite(requestedRadius)
     ? Math.min(Math.max(requestedRadius, 500), MAX_QUERY_RADIUS_METERS)
     : 25_000;
+
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 25_000);
 
   try {
+    let deflockSpots: Spot[] = [];
+
     try {
-      const allSpots = await fetchDeFlock(controller.signal);
-      const spots = filterNearby(allSpots, latitude, longitude, radiusMeters);
-      if (spots.length > 0) {
-        return Response.json({ spots, source: "DeFlock", count: spots.length }, {
-          headers: { "Cache-Control": "public, s-maxage=300, stale-while-revalidate=3600" },
-        });
-      }
+      deflockSpots = filterNearby(
+        await fetchDeFlock(controller.signal),
+        latitude,
+        longitude,
+        radiusMeters,
+      );
     } catch {
-      // Use Overpass when the public DeFlock dataset is unavailable.
+      // Keep going with OpenStreetMap when DeFlock is unavailable.
     }
 
-    const spots = await fetchOverpass(latitude, longitude, radiusMeters, controller.signal);
-    return Response.json({ spots, source: "OpenStreetMap", count: spots.length }, {
-      headers: { "Cache-Control": "public, s-maxage=300, stale-while-revalidate=3600" },
-    });
+    let overpassSpots: Spot[] = [];
+
+    try {
+      overpassSpots = await fetchOverpass(
+        latitude,
+        longitude,
+        radiusMeters,
+        controller.signal,
+      );
+    } catch {
+      // DeFlock data can still be returned when Overpass is rate-limited.
+    }
+
+    const spots = mergeSpots(deflockSpots, overpassSpots);
+
+    if (spots.length === 0 && deflockSpots.length === 0 && overpassSpots.length === 0) {
+      return Response.json(
+        { spots: [], source: "none", count: 0 },
+        { headers: { "Cache-Control": "public, s-maxage=300, stale-while-revalidate=3600" } },
+      );
+    }
+
+    return Response.json(
+      {
+        spots,
+        source: deflockSpots.length > 0 && overpassSpots.length > 0
+          ? "DeFlock + OpenStreetMap"
+          : deflockSpots.length > 0
+            ? "DeFlock"
+            : "OpenStreetMap",
+        count: spots.length,
+      },
+      { headers: { "Cache-Control": "public, s-maxage=300, stale-while-revalidate=3600" } },
+    );
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError") {
       return Response.json({ error: "Camera data request timed out." }, { status: 504 });
     }
-    return Response.json({ error: error instanceof Error ? error.message : "Camera data unavailable." }, { status: 502 });
+
+    return Response.json(
+      { error: error instanceof Error ? error.message : "Camera data unavailable." },
+      { status: 502 },
+    );
   } finally {
     clearTimeout(timeout);
   }
