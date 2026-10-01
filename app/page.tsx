@@ -52,7 +52,7 @@ function Icon({ name, size = 18 }: { name: "locate" | "settings" | "plus" | "clo
 }
 
 export default function Home() {
-  const mapRef = useRef<{ recenter: () => void; focusSpot: (spot: Spot) => void; findNearbyCamera: (location: UserLocation, radiusMeters: number) => Spot | null } | null>(null);
+  const mapRef = useRef<{ recenter: () => void; focusSpot: (spot: Spot) => void; findNearbyCameras: (location: UserLocation, radiusMeters: number) => Spot[]; findNearbyCamera: (location: UserLocation, radiusMeters: number) => Spot | null } | null>(null);
   const lastQueryRef = useRef<{ location: UserLocation; radiusMeters: number } | null>(null);
 
   const [theme, setTheme] = useState<Theme>(() => readLocalStorage(STORAGE_KEYS.theme, "dark"));
@@ -62,6 +62,7 @@ export default function Home() {
   const [manualLocation, setManualLocation] = useState<UserLocation | null>(() => readLocalStorage(STORAGE_KEYS.manualLocation, null));
   const [locationPermission, setLocationPermission] = useState<"granted" | "denied" | "prompt" | "unknown" | "manual">(permissionState());
   const [spots, setSpots] = useState<Spot[]>([]);
+  const [loadedMapSpots, setLoadedMapSpots] = useState<Spot[]>([]);
   const [dataSource, setDataSource] = useState<SpotFetchResult["source"]>("none");
   const [cameraStatus, setCameraStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [cameraError, setCameraError] = useState<string | null>(null);
@@ -144,45 +145,83 @@ export default function Home() {
     return () => window.clearTimeout(timer);
   }, [effectiveLocation, loadSpots]);
 
+  const alertInsideRef = useRef<Set<string>>(new Set());
+
   useEffect(() => {
-    if (!effectiveLocation || !settings.enabled) return;
+    if (!effectiveLocation || !settings.enabled) {
+      alertInsideRef.current.clear();
+      return;
+    }
 
     const threshold = feetToMeters(settings.distanceFeet);
 
     const check = () => {
-      const apiCandidate = findNearbySpots(spots, effectiveLocation, threshold)
-        .find((spot) => !alertState[spot.id] || Date.now() - alertState[spot.id] > 40_000);
+      const apiNearby = findNearbySpots(spots, effectiveLocation, threshold);
+      const mapNearby = mapRef.current?.findNearbyCameras(effectiveLocation, threshold) ?? [];
+      const merged = new Map<string, Spot>();
 
-      const mapCandidate = mapRef.current?.findNearbyCamera(effectiveLocation, threshold) ?? null;
-      const candidate = apiCandidate ?? (
-        mapCandidate && (!alertState[mapCandidate.id] || Date.now() - alertState[mapCandidate.id] > 40_000)
-          ? mapCandidate
-          : null
-      );
+      for (const spot of [...apiNearby, ...mapNearby]) {
+        merged.set(spot.id, spot);
+      }
 
-      if (!candidate) return;
+      const currentIds = new Set(merged.keys());
+      const entered = [...merged.values()].find((spot) => !alertInsideRef.current.has(spot.id));
 
-      const distanceMeters = distanceBetweenMeters(effectiveLocation, candidate);
-      const distance = formatDistance(distanceMeters, settings.units);
+      if (entered) {
+        const distance = formatDistance(
+          distanceBetweenMeters(effectiveLocation, entered),
+          settings.units,
+        );
 
-      setAlertMessage(`You are approximately ${distance} from a mapped camera.`);
-      setAlertState((current) => ({ ...current, [candidate.id]: Date.now() }));
-      showLocalNotification("FlockSpot Alert", `You're approximately ${distance} from a mapped camera.`);
-      playAlertSound();
+        setAlertMessage(`You are approximately ${distance} from a mapped camera.`);
+        setAlertState((current) => ({ ...current, [entered.id]: Date.now() }));
+        showLocalNotification(
+          "FlockSpot Alert",
+          `You're approximately ${distance} from a mapped camera.`,
+        );
+        playAlertSound();
+      }
+
+      alertInsideRef.current = currentIds;
     };
 
     check();
-    const timer = window.setInterval(check, 2_000);
+    const timer = window.setInterval(check, 1_000);
     return () => window.clearInterval(timer);
-  }, [alertState, effectiveLocation, settings, spots]);
+  }, [effectiveLocation, settings.distanceFeet, settings.enabled, settings.units, spots]);
 
-  const nearbySpots = useMemo(() => findNearbySpots(spots, effectiveLocation, feetToMeters(settings.distanceFeet) * 4), [effectiveLocation, settings.distanceFeet, spots]);
+
+  const allKnownSpots = useMemo(() => {
+    const merged = new Map<string, Spot>();
+    for (const spot of [...spots, ...loadedMapSpots]) merged.set(spot.id, spot);
+    return [...merged.values()];
+  }, [loadedMapSpots, spots]);
+
+  const nearbySpots = useMemo(
+    () => findNearbySpots(allKnownSpots, effectiveLocation, feetToMeters(settings.distanceFeet) * 4),
+    [allKnownSpots, effectiveLocation, settings.distanceFeet],
+  );
   const selectedSpot = useMemo(() => spots.find((spot) => spot.id === selectedSpotId) ?? nearbySpots[0] ?? null, [nearbySpots, selectedSpotId, spots]);
   const duplicateSpots = useMemo(() => addCandidate ? spots.filter((spot) => isDuplicateSpot(addCandidate, spot, config.duplicateRadiusFeet)) : [], [addCandidate, spots]);
 
   const openPanel = (next: Panel) => {
     setPanel(next);
     setMenuOpen(false);
+
+    if (next === "nearby") {
+      const location = effectiveLocation;
+      if (location) {
+        const loaded = mapRef.current?.findNearbyCameras(
+          location,
+          feetToMeters(settings.distanceFeet) * 4,
+        ) ?? [];
+        setLoadedMapSpots((current) => {
+          const merged = new Map(current.map((spot) => [spot.id, spot]));
+          for (const spot of loaded) merged.set(spot.id, spot);
+          return [...merged.values()];
+        });
+      }
+    }
   };
 
   const recenter = () => {
@@ -263,6 +302,7 @@ export default function Home() {
         onSelectSpot={handleMapSelect}
         onFollowLocationChange={setFollowLocation}
         onViewportChange={handleViewportChange}
+        onLoadedCameras={setLoadedMapSpots}
       />
 
       <header className="topbar">
@@ -273,8 +313,8 @@ export default function Home() {
 
         <div className="topbar-status">
           <span className={`status-dot ${cameraStatus}`} />
-          <span>{cameraStatus === "loading" ? "Updating" : `${spots.length} cameras`}</span>
-          {dataSource !== "none" && <small>{dataSource}</small>}
+          <span>{allKnownSpots.length.toLocaleString()} cameras</span>
+          {cameraStatus === "loading" && <small>updating</small>}
         </div>
 
         <div className="topbar-actions">
