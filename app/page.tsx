@@ -238,6 +238,7 @@ export default function Home() {
   }, [loadSpots]);
 
   const enableNotifications = async () => {
+    await unlockAlertAudio();
     if (!("Notification" in window)) {
       setNotificationStatus("unsupported");
       return;
@@ -311,10 +312,9 @@ export default function Home() {
           <span><strong>Flock</strong><span>Spot</span></span>
         </button>
 
-        <div className="topbar-status">
+        <div className="topbar-status" aria-live="polite">
           <span className={`status-dot ${cameraStatus}`} />
           <span>{allKnownSpots.length.toLocaleString()} cameras</span>
-          {cameraStatus === "loading" && <small>updating</small>}
         </div>
 
         <div className="topbar-actions">
@@ -330,10 +330,6 @@ export default function Home() {
           <button onClick={() => openPanel("settings")}><Icon name="settings" /><span>Settings</span><Icon name="chevron" size={15} /></button>
         </div>
       )}
-
-      <div className="map-tools">
-        <button className={`tool-button ${followLocation ? "active" : ""}`} onClick={recenter} disabled={!effectiveLocation} type="button"><Icon name="locate" size={17} />{followLocation ? "Following" : "Locate me"}</button>
-      </div>
 
       {selectedSpot && panel === "map" && (
         <section className="spot-card" aria-label="Selected camera">
