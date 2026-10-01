@@ -114,12 +114,6 @@ function mergeSpots(primary: Spot[], secondary: Spot[]) {
     const key = coordinateKey(spot);
     if (keys.has(key)) continue;
 
-    const duplicate = merged.some(
-      (existing) => distanceBetweenMeters(existing, spot) <= OVERPASS_DUPLICATE_RADIUS_METERS,
-    );
-
-    if (duplicate) continue;
-
     keys.add(key);
     merged.push(spot);
   }
