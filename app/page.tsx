@@ -10,7 +10,7 @@ import {
   formatDistance,
   isDuplicateSpot,
 } from "@/lib/geo";
-import { requestNotificationsPermission, showLocalNotification } from "@/lib/notifications";
+import { playAlertSound, requestNotificationsPermission, showLocalNotification, unlockAlertAudio } from "@/lib/notifications";
 import { fetchNearbySpots, type SpotFetchResult } from "@/lib/overpass";
 import { readLocalStorage, writeLocalStorage } from "@/lib/storage";
 import type { AlertPreferences, LocalAlertState, Spot, UserLocation } from "@/types/spot";
@@ -52,7 +52,7 @@ function Icon({ name, size = 18 }: { name: "locate" | "settings" | "plus" | "clo
 }
 
 export default function Home() {
-  const mapRef = useRef<{ recenter: () => void; focusSpot: (spot: Spot) => void } | null>(null);
+  const mapRef = useRef<{ recenter: () => void; focusSpot: (spot: Spot) => void; findNearbyCamera: (location: UserLocation, radiusMeters: number) => Spot | null } | null>(null);
   const lastQueryRef = useRef<{ location: UserLocation; radiusMeters: number } | null>(null);
 
   const [theme, setTheme] = useState<Theme>(() => readLocalStorage(STORAGE_KEYS.theme, "dark"));
@@ -82,6 +82,19 @@ export default function Home() {
   const effectiveLocation = manualLocation ?? location;
   useEffect(() => { writeLocalStorage(STORAGE_KEYS.theme, theme); }, [theme]);
   useEffect(() => { writeLocalStorage(STORAGE_KEYS.settings, settings); }, [settings]);
+  useEffect(() => {
+    const unlock = () => {
+      void unlockAlertAudio();
+    };
+
+    window.addEventListener("pointerdown", unlock, { passive: true });
+    window.addEventListener("keydown", unlock);
+    return () => {
+      window.removeEventListener("pointerdown", unlock);
+      window.removeEventListener("keydown", unlock);
+    };
+  }, []);
+
   useEffect(() => { writeLocalStorage(STORAGE_KEYS.alertState, alertState); }, [alertState]);
   useEffect(() => { writeLocalStorage(STORAGE_KEYS.manualLocation, manualLocation); }, [manualLocation]);
 
@@ -132,19 +145,35 @@ export default function Home() {
   }, [effectiveLocation, loadSpots]);
 
   useEffect(() => {
-    if (!effectiveLocation || !settings.enabled || spots.length === 0) return;
-    const threshold = feetToMeters(settings.distanceFeet);
-    const nearby = findNearbySpots(spots, effectiveLocation, threshold);
-    const candidate = nearby.find((spot) => !alertState[spot.id] || Date.now() - alertState[spot.id] > 40_000);
-    if (!candidate) return;
+    if (!effectiveLocation || !settings.enabled) return;
 
-    const distance = formatDistance(candidate.distanceMeters, settings.units);
-    const timeout = window.setTimeout(() => {
+    const threshold = feetToMeters(settings.distanceFeet);
+
+    const check = () => {
+      const apiCandidate = findNearbySpots(spots, effectiveLocation, threshold)
+        .find((spot) => !alertState[spot.id] || Date.now() - alertState[spot.id] > 40_000);
+
+      const mapCandidate = mapRef.current?.findNearbyCamera(effectiveLocation, threshold) ?? null;
+      const candidate = apiCandidate ?? (
+        mapCandidate && (!alertState[mapCandidate.id] || Date.now() - alertState[mapCandidate.id] > 40_000)
+          ? mapCandidate
+          : null
+      );
+
+      if (!candidate) return;
+
+      const distanceMeters = distanceBetweenMeters(effectiveLocation, candidate);
+      const distance = formatDistance(distanceMeters, settings.units);
+
       setAlertMessage(`You are approximately ${distance} from a mapped camera.`);
       setAlertState((current) => ({ ...current, [candidate.id]: Date.now() }));
       showLocalNotification("FlockSpot Alert", `You're approximately ${distance} from a mapped camera.`);
-    }, 0);
-    return () => window.clearTimeout(timeout);
+      playAlertSound();
+    };
+
+    check();
+    const timer = window.setInterval(check, 2_000);
+    return () => window.clearInterval(timer);
   }, [alertState, effectiveLocation, settings, spots]);
 
   const nearbySpots = useMemo(() => findNearbySpots(spots, effectiveLocation, feetToMeters(settings.distanceFeet) * 4), [effectiveLocation, settings.distanceFeet, spots]);
