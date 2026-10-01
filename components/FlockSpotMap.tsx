@@ -50,6 +50,53 @@ function viewportRadius(map: maplibregl.Map) {
   );
 }
 
+function collectNearbyCameras(
+  map: maplibregl.Map | null,
+  location: UserLocation,
+  radiusMeters: number,
+): Spot[] {
+  if (!map || !map.isStyleLoaded()) return [];
+
+  const features = map.querySourceFeatures("deflockCameras", {
+    sourceLayer: "cameras",
+  });
+  const seen = new Set<string>();
+  const nearby: Spot[] = [];
+
+  for (const feature of features) {
+    const geometry = feature.geometry;
+    if (geometry.type !== "Point") continue;
+    const [longitude, latitude] = geometry.coordinates;
+    if (typeof latitude !== "number" || typeof longitude !== "number") continue;
+
+    const properties = feature.properties ?? {};
+    const osmType = String(properties.osmType ?? "node");
+    const osmId = String(properties.osmId ?? `${latitude.toFixed(6)}-${longitude.toFixed(6)}`);
+    const id = `deflock-${osmType}-${osmId}`;
+    if (seen.has(id)) continue;
+
+    const distanceMeters = distanceBetweenMeters(location, { latitude, longitude });
+    if (distanceMeters > radiusMeters) continue;
+
+    seen.add(id);
+    nearby.push({
+      id,
+      latitude,
+      longitude,
+      type: "ALPR",
+      manufacturer: properties.brand ? String(properties.brand) : "Flock Safety",
+      operator: properties.operator ? String(properties.operator) : "DeFlock / OpenStreetMap",
+      source: "DeFlock camera tiles",
+      name: properties.ref ? String(properties.ref) : "Flock camera",
+      direction: typeof properties.direction === "number" ? properties.direction : undefined,
+    });
+  }
+
+  return nearby.sort(
+    (a, b) => distanceBetweenMeters(location, a) - distanceBetweenMeters(location, b),
+  );
+}
+
 const FlockSpotMap = forwardRef<FlockSpotMapHandle, FlockSpotMapProps>(function FlockSpotMap(
   {
     spots,
@@ -101,50 +148,10 @@ const FlockSpotMap = forwardRef<FlockSpotMapHandle, FlockSpotMapProps>(function 
       });
     },
     findNearbyCameras(location, radiusMeters) {
-      const map = mapRef.current;
-      if (!map || !map.isStyleLoaded()) return [];
-
-      const features = map.querySourceFeatures("deflockCameras", {
-        sourceLayer: "cameras",
-      });
-      const seen = new Set<string>();
-      const nearby: Spot[] = [];
-
-      for (const feature of features) {
-        const geometry = feature.geometry;
-        if (geometry.type !== "Point") continue;
-        const [longitude, latitude] = geometry.coordinates;
-        if (typeof latitude !== "number" || typeof longitude !== "number") continue;
-
-        const properties = feature.properties ?? {};
-        const osmType = String(properties.osmType ?? "node");
-        const osmId = String(properties.osmId ?? `${latitude.toFixed(6)}-${longitude.toFixed(6)}`);
-        const id = `deflock-${osmType}-${osmId}`;
-        if (seen.has(id)) continue;
-
-        const distanceMeters = distanceBetweenMeters(location, { latitude, longitude });
-        if (distanceMeters > radiusMeters) continue;
-
-        seen.add(id);
-        nearby.push({
-          id,
-          latitude,
-          longitude,
-          type: "ALPR",
-          manufacturer: properties.brand ? String(properties.brand) : "Flock Safety",
-          operator: properties.operator ? String(properties.operator) : "DeFlock / OpenStreetMap",
-          source: "DeFlock camera tiles",
-          name: properties.ref ? String(properties.ref) : "Flock camera",
-          direction: typeof properties.direction === "number" ? properties.direction : undefined,
-        });
-      }
-
-      return nearby.sort(
-        (a, b) => distanceBetweenMeters(location, a) - distanceBetweenMeters(location, b),
-      );
+      return collectNearbyCameras(mapRef.current, location, radiusMeters);
     },
     findNearbyCamera(location, radiusMeters) {
-      return this.findNearbyCameras(location, radiusMeters)[0] ?? null;
+      return collectNearbyCameras(mapRef.current, location, radiusMeters)[0] ?? null;
     },
     focusSpot(spot) {
       const map = mapRef.current;

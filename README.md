@@ -33,9 +33,9 @@ The camera query necessarily includes the requested coordinates so the public-da
 
 ## Alerts
 
-The default alert distance is 500 feet. Available distances are 250, 500, 1,000, and 2,500 feet.
+The default alert distance is 500 feet. Available distances are 250, 500, 1,000, and 2,500 feet. Alerts appear in a single in-app toast and play locally. An alerted camera stays suppressed until the device has moved at least three times the selected alert distance away from it.
 
-Browser notifications are optional. Like other browser geolocation applications, reliable monitoring while a tab or device is completely closed is limited by the browser and operating system.
+Like other browser geolocation applications, reliable monitoring while a tab or device is completely closed is limited by the browser and operating system.
 
 ## Add a camera
 

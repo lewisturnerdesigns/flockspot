@@ -10,20 +10,21 @@ import {
   formatDistance,
   isDuplicateSpot,
 } from "@/lib/geo";
-import { playAlertSound, requestNotificationsPermission, showLocalNotification, unlockAlertAudio } from "@/lib/notifications";
+import { playAlertSound, unlockAlertAudio } from "@/lib/notifications";
 import { fetchNearbySpots, type SpotFetchResult } from "@/lib/overpass";
 import { readLocalStorage, writeLocalStorage } from "@/lib/storage";
 import type { AlertPreferences, LocalAlertState, Spot, UserLocation } from "@/types/spot";
 
 const STORAGE_KEYS = {
   settings: "flockspot-settings",
-  alertState: "flockspot-alert-state",
+  alertState: "flockspot-alert-state-v2",
   manualLocation: "flockspot-manual-location",
   theme: "flockspot-theme",
 } as const;
 
 type Theme = "light" | "dark";
 type Panel = "map" | "nearby" | "add" | "settings";
+const ALERT_REARM_DISTANCE_MULTIPLIER = 3;
 
 function defaultSettings(): AlertPreferences {
   return { enabled: true, distanceFeet: config.defaultAlertDistanceFeet, units: "miles" };
@@ -65,15 +66,10 @@ export default function Home() {
   const [loadedMapSpots, setLoadedMapSpots] = useState<Spot[]>([]);
   const [dataSource, setDataSource] = useState<SpotFetchResult["source"]>("none");
   const [cameraStatus, setCameraStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
-  const [cameraError, setCameraError] = useState<string | null>(null);
   const [followLocation, setFollowLocation] = useState(true);
   const [panel, setPanel] = useState<Panel>("map");
-  const [menuOpen, setMenuOpen] = useState(false);
   const [selectedSpotId, setSelectedSpotId] = useState<string | null>(null);
   const [alertMessage, setAlertMessage] = useState<string | null>(null);
-  const [notificationStatus, setNotificationStatus] = useState<NotificationPermission | "unsupported">(() =>
-    typeof window !== "undefined" && "Notification" in window ? Notification.permission : "unsupported",
-  );
   const [addCandidate, setAddCandidate] = useState<UserLocation | null>(null);
   const [manualLatitude, setManualLatitude] = useState("");
   const [manualLongitude, setManualLongitude] = useState("");
@@ -98,6 +94,12 @@ export default function Home() {
 
   useEffect(() => { writeLocalStorage(STORAGE_KEYS.alertState, alertState); }, [alertState]);
   useEffect(() => { writeLocalStorage(STORAGE_KEYS.manualLocation, manualLocation); }, [manualLocation]);
+  useEffect(() => {
+    if (!alertMessage) return;
+
+    const timer = window.setTimeout(() => setAlertMessage(null), 4_800);
+    return () => window.clearTimeout(timer);
+  }, [alertMessage]);
 
 
   useEffect(() => {
@@ -123,7 +125,6 @@ export default function Home() {
 
     lastQueryRef.current = { location: queryLocation, radiusMeters };
     setCameraStatus("loading");
-    setCameraError(null);
 
     try {
       const result = await fetchNearbySpots(queryLocation, radiusMeters);
@@ -133,7 +134,6 @@ export default function Home() {
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") return;
       setCameraStatus("error");
-      setCameraError(error instanceof Error ? error.message : "Camera data is unavailable.");
     }
   }, []);
 
@@ -145,15 +145,11 @@ export default function Home() {
     return () => window.clearTimeout(timer);
   }, [effectiveLocation, loadSpots]);
 
-  const alertInsideRef = useRef<Set<string>>(new Set());
-
   useEffect(() => {
-    if (!effectiveLocation || !settings.enabled) {
-      alertInsideRef.current.clear();
-      return;
-    }
+    if (!effectiveLocation || !settings.enabled) return;
 
     const threshold = feetToMeters(settings.distanceFeet);
+    const rearmDistance = threshold * ALERT_REARM_DISTANCE_MULTIPLIER;
 
     const check = () => {
       const apiNearby = findNearbySpots(spots, effectiveLocation, threshold);
@@ -164,8 +160,25 @@ export default function Home() {
         merged.set(spot.id, spot);
       }
 
-      const currentIds = new Set(merged.keys());
-      const entered = [...merged.values()].find((spot) => !alertInsideRef.current.has(spot.id));
+      let nextAlertState = alertState;
+      let hasRearmed = false;
+
+      for (const [spotId, previousAlert] of Object.entries(alertState)) {
+        if (distanceBetweenMeters(effectiveLocation, previousAlert) >= rearmDistance) {
+          if (!hasRearmed) nextAlertState = { ...alertState };
+          delete nextAlertState[spotId];
+          hasRearmed = true;
+        }
+      }
+
+      const entered = [...merged.values()].find((spot) => {
+        if (nextAlertState[spot.id]) return false;
+
+        return !Object.values(nextAlertState).some(
+          (previousAlert) =>
+            distanceBetweenMeters(previousAlert, spot) <= feetToMeters(config.duplicateRadiusFeet),
+        );
+      });
 
       if (entered) {
         const distance = formatDistance(
@@ -174,21 +187,24 @@ export default function Home() {
         );
 
         setAlertMessage(`You are approximately ${distance} from a mapped camera.`);
-        setAlertState((current) => ({ ...current, [entered.id]: Date.now() }));
-        showLocalNotification(
-          "FlockSpot Alert",
-          `You're approximately ${distance} from a mapped camera.`,
-        );
+        setAlertState({
+          ...nextAlertState,
+          [entered.id]: {
+            alertedAt: Date.now(),
+            latitude: entered.latitude,
+            longitude: entered.longitude,
+          },
+        });
         playAlertSound();
+      } else if (hasRearmed) {
+        setAlertState(nextAlertState);
       }
-
-      alertInsideRef.current = currentIds;
     };
 
     check();
     const timer = window.setInterval(check, 1_000);
     return () => window.clearInterval(timer);
-  }, [effectiveLocation, settings.distanceFeet, settings.enabled, settings.units, spots]);
+  }, [alertState, effectiveLocation, settings.distanceFeet, settings.enabled, settings.units, spots]);
 
 
   const allKnownSpots = useMemo(() => {
@@ -206,7 +222,6 @@ export default function Home() {
 
   const openPanel = (next: Panel) => {
     setPanel(next);
-    setMenuOpen(false);
 
     if (next === "nearby") {
       const location = effectiveLocation;
@@ -236,15 +251,6 @@ export default function Home() {
   const handleViewportChange = useCallback((queryLocation: UserLocation, radiusMeters: number) => {
     void loadSpots(queryLocation, radiusMeters);
   }, [loadSpots]);
-
-  const enableNotifications = async () => {
-    await unlockAlertAudio();
-    if (!("Notification" in window)) {
-      setNotificationStatus("unsupported");
-      return;
-    }
-    setNotificationStatus(await requestNotificationsPermission());
-  };
 
   const useCurrentForAdd = () => {
     if (!effectiveLocation) {
@@ -307,29 +313,18 @@ export default function Home() {
       />
 
       <header className="topbar">
-        <button className="brand" type="button" onClick={() => openPanel("map")} aria-label="FlockSpot home">
-          <span className="brand-mark"><Icon name="camera" size={19} /></span>
-          <span><strong>Flock</strong><span>Spot</span></span>
-        </button>
-
-        <div className="topbar-status" aria-live="polite">
-          <span className={`status-dot ${cameraStatus}`} />
-          <span>{allKnownSpots.length.toLocaleString()} cameras</span>
+        <div className="brand-cluster">
+          <button className="brand" type="button" onClick={() => openPanel("map")} aria-label="FlockSpot home">
+            <span className="brand-mark"><Icon name="camera" size={19} /></span>
+            <span><strong>Flock</strong><span>Spot</span></span>
+          </button>
+          <div className="topbar-status" aria-live="polite">
+            <span className={`status-dot ${cameraStatus}`} />
+            <span>{allKnownSpots.length.toLocaleString()} cameras</span>
+          </div>
         </div>
 
-        <div className="topbar-actions">
-          <button className="icon-button" type="button" onClick={recenter} disabled={!effectiveLocation} aria-label="Center on my location" title="Center on my location"><Icon name="locate" /></button>
-          <button className="icon-button" type="button" onClick={() => setMenuOpen((value) => !value)} aria-expanded={menuOpen} aria-label="Open menu"><Icon name={menuOpen ? "close" : "settings"} /></button>
-        </div>
       </header>
-
-      {menuOpen && (
-        <div className="quick-menu" role="dialog" aria-label="FlockSpot navigation">
-          <button onClick={() => openPanel("nearby")}><Icon name="list" /><span>Nearby cameras</span><Icon name="chevron" size={15} /></button>
-          <button onClick={() => openPanel("add")}><Icon name="plus" /><span>Add a camera</span><Icon name="chevron" size={15} /></button>
-          <button onClick={() => openPanel("settings")}><Icon name="settings" /><span>Settings</span><Icon name="chevron" size={15} /></button>
-        </div>
-      )}
 
       {selectedSpot && panel === "map" && (
         <section className="spot-card" aria-label="Selected camera">
@@ -377,7 +372,6 @@ export default function Home() {
               <section className="settings-section"><div className="section-heading"><div><strong>Proximity alerts</strong><span>Keep alerts local to this device.</span></div><button className={`toggle ${settings.enabled ? "on" : ""}`} type="button" onClick={() => setSettings((current) => ({ ...current, enabled: !current.enabled }))} aria-label="Toggle alerts"><span /></button></div>
                 <div className="choice-grid">{[250, 500, 1000, 2500].map((distance) => <button key={distance} className={settings.distanceFeet === distance ? "choice active" : "choice"} type="button" onClick={() => setSettings((current) => ({ ...current, distanceFeet: distance }))}>{distance.toLocaleString()} ft</button>)}</div>
               </section>
-              <section className="settings-section"><div className="section-heading"><div><strong>Notifications</strong><span>{notificationStatus === "granted" ? "Browser notifications are enabled." : "Optional browser alerts."}</span></div><Icon name="bell" /></div>{notificationStatus !== "granted" && notificationStatus !== "unsupported" && <button className="secondary-button" type="button" onClick={enableNotifications}>Enable notifications</button>}{notificationStatus === "unsupported" && <p className="form-message">This browser does not support notifications.</p>}</section>
               <section className="settings-section"><div className="section-heading"><div><strong>Appearance</strong><span>Choose your map interface.</span></div></div><div className="choice-grid two">{(["dark", "light"] as Theme[]).map((mode) => <button key={mode} className={theme === mode ? "choice active" : "choice"} type="button" onClick={() => setTheme(mode)}>{mode === "dark" ? <Icon name="moon" size={16} /> : <Icon name="sun" size={16} />}{mode[0].toUpperCase() + mode.slice(1)}</button>)}</div></section>
               <section className="settings-section"><div className="section-heading"><div><strong>Units</strong><span>Distance display.</span></div></div><div className="choice-grid two"><button className={settings.units === "miles" ? "choice active" : "choice"} onClick={() => setSettings((current) => ({ ...current, units: "miles" }))} type="button">Miles</button><button className={settings.units === "kilometers" ? "choice active" : "choice"} onClick={() => setSettings((current) => ({ ...current, units: "kilometers" }))} type="button">Kilometers</button></div></section>
               <section className="settings-section"><div className="section-heading"><div><strong>Custom location</strong><span>Useful for testing or when GPS is unavailable.</span></div></div><div className="field-row"><label className="field-label">Latitude<input value={manualLatitude} onChange={(event) => setManualLatitude(event.target.value)} inputMode="decimal" placeholder="40.7128" /></label><label className="field-label">Longitude<input value={manualLongitude} onChange={(event) => setManualLongitude(event.target.value)} inputMode="decimal" placeholder="-74.0060" /></label></div><div className="button-row"><button className="primary-button" type="button" onClick={applyManualLocation}>Apply</button><button className="secondary-button" type="button" onClick={clearManualLocation}>Clear</button></div>{locationPermission === "manual" && <p className="form-message">Using custom coordinates.</p>}</section>
@@ -387,18 +381,15 @@ export default function Home() {
         </aside>
       )}
 
-      <nav className="bottom-nav" aria-label="Primary navigation">
-        <button className={panel === "map" ? "active" : ""} onClick={() => setPanel("map")} type="button"><Icon name="map" /><span>Map</span></button>
-        <button className={panel === "nearby" ? "active" : ""} onClick={() => setPanel("nearby")} type="button"><Icon name="list" /><span>Nearby</span></button>
+      <nav className="bottom-nav" aria-label="Main menu">
+        <button className={panel === "map" ? "active" : ""} onClick={() => openPanel("map")} type="button"><Icon name="map" /><span>Map</span></button>
+        <button type="button" onClick={recenter} disabled={!effectiveLocation} aria-label="Center on my location" title="Center on my location"><Icon name="locate" /><span>Locate</span></button>
+        <button className={panel === "nearby" ? "active" : ""} onClick={() => openPanel("nearby")} type="button"><Icon name="list" /><span>Nearby</span></button>
         <button className="add-nav" onClick={useCurrentForAdd} type="button"><span><Icon name="plus" size={21} /></span><small>Add</small></button>
-        <button className={panel === "settings" ? "active" : ""} onClick={() => setPanel("settings")} type="button"><Icon name="settings" /><span>Settings</span></button>
+        <button className={panel === "settings" ? "active" : ""} onClick={() => openPanel("settings")} type="button"><Icon name="settings" /><span>Settings</span></button>
       </nav>
 
       {alertMessage && <div className="alert-toast" role="status"><span className="alert-icon"><Icon name="bell" size={17} /></span><div><strong>FlockSpot alert</strong><p>{alertMessage}</p></div><button onClick={() => setAlertMessage(null)} type="button" aria-label="Dismiss alert"><Icon name="close" size={15} /></button></div>}
-
-      {cameraError && <div className="data-warning"><span className="status-dot error" /><span>{cameraError}</span><button type="button" onClick={() => effectiveLocation && void loadSpots(effectiveLocation, config.cameraSearchRadiusMeters)}>Retry</button></div>}
-
-      {!effectiveLocation && cameraStatus !== "loading" && <div className="location-prompt"><span className="prompt-icon"><Icon name="locate" /></span><div><strong>Location access is off</strong><p>Allow location to see nearby cameras and enable proximity alerts.</p></div></div>}
 
       <div className="map-attribution">Public camera data · OpenStreetMap / DeFlock</div>
     </main>

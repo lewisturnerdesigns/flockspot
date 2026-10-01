@@ -23,4 +23,7 @@ export type AlertPreferences = {
   units: "miles" | "kilometers";
 };
 
-export type LocalAlertState = Record<string, number>;
+export type LocalAlertState = Record<
+  string,
+  { alertedAt: number; latitude: number; longitude: number }
+>;
