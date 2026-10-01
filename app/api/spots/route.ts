@@ -130,8 +130,7 @@ function mergeSpots(primary: Spot[], secondary: Spot[]) {
 async function fetchDeFlock(signal: AbortSignal) {
   const response = await fetch(DEFLOCK_DATASET_URL, {
     headers: { Accept: "application/geo+json, application/json" },
-    cache: "force-cache",
-    next: { revalidate: 3600 },
+    cache: "no-store",
     signal,
   });
 
