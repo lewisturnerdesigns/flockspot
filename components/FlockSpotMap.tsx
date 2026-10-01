@@ -12,6 +12,7 @@ maplibregl.setWorkerUrl("/maplibre/maplibre-gl-worker.mjs");
 export type FlockSpotMapHandle = {
   recenter: () => void;
   focusSpot: (spot: Spot) => void;
+  findNearbyCamera: (location: UserLocation, radiusMeters: number) => Spot | null;
 };
 
 type FlockSpotMapProps = {
@@ -95,6 +96,44 @@ const FlockSpotMap = forwardRef<FlockSpotMapHandle, FlockSpotMapProps>(function 
         duration: 450,
         essential: true,
       });
+    },
+    findNearbyCamera(location, radiusMeters) {
+      const map = mapRef.current;
+      if (!map || !map.isStyleLoaded()) return null;
+
+      const features = map.querySourceFeatures("deflockCameras", {
+        sourceLayer: "cameras",
+      });
+      let closest: Spot | null = null;
+      let closestDistance = radiusMeters;
+
+      for (const feature of features) {
+        const geometry = feature.geometry;
+        if (geometry.type !== "Point") continue;
+        const [longitude, latitude] = geometry.coordinates;
+        if (typeof latitude !== "number" || typeof longitude !== "number") continue;
+
+        const distanceMeters = distanceBetweenMeters(location, { latitude, longitude });
+        if (distanceMeters > closestDistance) continue;
+
+        const properties = feature.properties ?? {};
+        const osmType = String(properties.osmType ?? "node");
+        const osmId = String(properties.osmId ?? `${latitude.toFixed(6)}-${longitude.toFixed(6)}`);
+        closestDistance = distanceMeters;
+        closest = {
+          id: `deflock-${osmType}-${osmId}`,
+          latitude,
+          longitude,
+          type: "ALPR",
+          manufacturer: properties.brand ? String(properties.brand) : "Flock Safety",
+          operator: properties.operator ? String(properties.operator) : "DeFlock / OpenStreetMap",
+          source: "DeFlock camera tiles",
+          name: properties.ref ? String(properties.ref) : "Flock camera",
+          direction: typeof properties.direction === "number" ? properties.direction : undefined,
+        };
+      }
+
+      return closest;
     },
     focusSpot(spot) {
       const map = mapRef.current;
